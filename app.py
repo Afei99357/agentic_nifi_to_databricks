@@ -414,4 +414,6 @@ def handle_exception(e):
 
 
 if __name__ == '__main__':
-    flask_app.run(debug=True, host='0.0.0.0', port=8080)
+    # Use PORT environment variable for Databricks Apps, fallback to 8080 for local dev
+    port = int(os.environ.get('PORT', 8080))
+    flask_app.run(debug=True, host='0.0.0.0', port=port)
