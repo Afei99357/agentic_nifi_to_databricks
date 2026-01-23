@@ -140,6 +140,20 @@ function selectFile(path, name, isDirectory) {
     }
 
     selectedFilePath = path;
+
+    // Update radio button selection
+    const radioButtons = document.querySelectorAll('input[name="selected_file"]');
+    radioButtons.forEach(radio => {
+        if (radio.value === path) {
+            radio.checked = true;
+        }
+    });
+
+    // Highlight selected file
+    const fileItems = document.querySelectorAll('.file-item');
+    fileItems.forEach(item => item.classList.remove('selected'));
+    event.currentTarget.classList.add('selected');
+
     document.getElementById('fileActions').style.display = 'block';
 }
 

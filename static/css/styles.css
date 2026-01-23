@@ -316,6 +316,17 @@ body {
     transform: translateX(5px);
 }
 
+.file-item.selected {
+    background: var(--primary-color);
+    color: white;
+    border: 2px solid var(--primary-dark);
+    font-weight: 500;
+}
+
+.file-item.selected .file-size {
+    color: rgba(255, 255, 255, 0.9);
+}
+
 .volume-icon, .file-icon {
     font-size: 1.5rem;
 }
@@ -324,6 +335,13 @@ body {
     margin-left: auto;
     color: var(--text-secondary);
     font-size: 0.9rem;
+}
+
+.file-item input[type="radio"] {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    accent-color: var(--primary-color);
 }
 
 .file-actions {
