@@ -68,25 +68,22 @@ class UnityCatalogService:
     def list_files(self, volume_path: str, filter_xml: bool = True) -> List[FileMetadata]:
         """List files in a Unity Catalog volume path."""
         try:
-            if not os.path.exists(volume_path):
-                raise Exception(f"Path does not exist: {volume_path}")
+            # Use Databricks Files API for Unity Catalog volumes
+            directory_entries = self.client.list_files_in_volume(volume_path)
 
             files = []
-            for item in os.listdir(volume_path):
-                full_path = os.path.join(volume_path, item)
-                stat = os.stat(full_path)
-
-                is_directory = os.path.isdir(full_path)
+            for entry in directory_entries:
+                is_directory = entry.is_directory
 
                 # Filter for XML files if requested
-                if filter_xml and not is_directory and not item.lower().endswith('.xml'):
+                if filter_xml and not is_directory and not entry.name.lower().endswith('.xml'):
                     continue
 
                 file_meta = FileMetadata(
-                    name=item,
-                    path=full_path,
-                    size=stat.st_size if not is_directory else 0,
-                    modified=datetime.fromtimestamp(stat.st_mtime),
+                    name=entry.name,
+                    path=entry.path,
+                    size=entry.file_size if entry.file_size else 0,
+                    modified=datetime.fromtimestamp(entry.last_modified / 1000) if entry.last_modified else datetime.now(),
                     is_directory=is_directory
                 )
                 files.append(file_meta)

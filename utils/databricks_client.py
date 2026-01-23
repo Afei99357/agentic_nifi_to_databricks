@@ -1,5 +1,6 @@
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service import jobs, workspace
+from databricks.sdk.service.files import DirectoryEntry
 import os
 
 
@@ -29,20 +30,40 @@ class DatabricksClientWrapper:
         except Exception as e:
             raise Exception(f"Failed to list volumes: {str(e)}")
 
-    def read_file(self, file_path: str) -> bytes:
-        """Read a file from Unity Catalog volume."""
+    def list_files_in_volume(self, volume_path: str):
+        """List files in a Unity Catalog volume using Files API."""
         try:
-            with open(file_path, 'rb') as f:
-                return f.read()
+            files = self.client.files.list_directory_contents(directory_path=volume_path)
+            return list(files)
+        except Exception as e:
+            raise Exception(f"Failed to list files in volume: {str(e)}")
+
+    def read_file(self, file_path: str) -> bytes:
+        """Read a file from Unity Catalog volume using Files API."""
+        try:
+            # Try Files API first (for Unity Catalog volumes)
+            try:
+                response = self.client.files.download(file_path=file_path)
+                return response.contents.read()
+            except:
+                # Fallback to standard file I/O for local files
+                with open(file_path, 'rb') as f:
+                    return f.read()
         except Exception as e:
             raise Exception(f"Failed to read file {file_path}: {str(e)}")
 
     def write_file(self, file_path: str, content: bytes):
-        """Write a file to Unity Catalog volume."""
+        """Write a file to Unity Catalog volume using Files API."""
         try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, 'wb') as f:
-                f.write(content)
+            # Try Files API first (for Unity Catalog volumes)
+            try:
+                import io
+                self.client.files.upload(file_path=file_path, contents=io.BytesIO(content), overwrite=True)
+            except:
+                # Fallback to standard file I/O for local files
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, 'wb') as f:
+                    f.write(content)
         except Exception as e:
             raise Exception(f"Failed to write file {file_path}: {str(e)}")
 
