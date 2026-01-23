@@ -1,0 +1,21 @@
+<div class="stepper">
+    <div class="step {% if current_step >= 1 %}active{% endif %} {% if current_step > 1 %}completed{% endif %}">
+        <div class="step-number">1</div>
+        <div class="step-label">Select NiFi Flow</div>
+    </div>
+    <div class="step-connector {% if current_step > 1 %}completed{% endif %}"></div>
+    <div class="step {% if current_step >= 2 %}active{% endif %} {% if current_step > 2 %}completed{% endif %}">
+        <div class="step-number">2</div>
+        <div class="step-label">Review Conversion</div>
+    </div>
+    <div class="step-connector {% if current_step > 2 %}completed{% endif %}"></div>
+    <div class="step {% if current_step >= 3 %}active{% endif %} {% if current_step > 3 %}completed{% endif %}">
+        <div class="step-number">3</div>
+        <div class="step-label">Deploy & Run</div>
+    </div>
+    <div class="step-connector {% if current_step > 3 %}completed{% endif %}"></div>
+    <div class="step {% if current_step >= 4 %}active{% endif %}">
+        <div class="step-number">4</div>
+        <div class="step-label">Monitor</div>
+    </div>
+</div>

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}NiFi to Databricks Converter{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="container">
+        <header class="app-header">
+            <h1>NiFi to Databricks Converter</h1>
+            <p class="subtitle">Convert NiFi flows to Databricks notebooks with AI-powered automation</p>
+        </header>
+
+        {% block stepper %}{% endblock %}
+
+        <main class="content">
+            {% block content %}{% endblock %}
+        </main>
+
+        <footer class="app-footer">
+            <p>&copy; 2026 Databricks. Powered by AI Agent Technology.</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

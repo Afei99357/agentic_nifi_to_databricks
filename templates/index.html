@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Home - NiFi to Databricks Converter{% endblock %}
+
+{% block content %}
+<div class="welcome-section">
+    <div class="welcome-card">
+        <h2>Welcome to NiFi-to-Databricks Converter</h2>
+        <p>Transform your Apache NiFi flows into Databricks notebooks with AI-powered conversion.</p>
+
+        <div class="feature-grid">
+            <div class="feature">
+                <div class="feature-icon">📁</div>
+                <h3>Select NiFi Flow</h3>
+                <p>Browse Unity Catalog volumes and select your NiFi XML file</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">🤖</div>
+                <h3>AI Conversion</h3>
+                <p>Our AI agent converts your flows into optimized Databricks notebooks</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">🚀</div>
+                <h3>Deploy & Run</h3>
+                <p>Deploy as Databricks jobs and execute in parallel</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">📊</div>
+                <h3>Monitor</h3>
+                <p>Track execution status in real-time with detailed logs</p>
+            </div>
+        </div>
+
+        <div class="cta-section">
+            <a href="/step1" class="btn btn-primary btn-large">Get Started</a>
+        </div>
+    </div>
+
+    <div class="info-section">
+        <h3>How It Works</h3>
+        <ol class="steps-list">
+            <li><strong>Select:</strong> Choose a NiFi XML file from Unity Catalog</li>
+            <li><strong>Convert:</strong> AI agent analyzes and converts flows to notebooks</li>
+            <li><strong>Review:</strong> Preview generated notebooks with syntax highlighting</li>
+            <li><strong>Deploy:</strong> Create a Databricks job with parallel tasks</li>
+            <li><strong>Monitor:</strong> Watch execution in real-time</li>
+        </ol>
+    </div>
+</div>
+{% endblock %}
