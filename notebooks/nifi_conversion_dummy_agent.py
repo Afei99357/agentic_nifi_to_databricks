@@ -1,196 +1,299 @@
 # Databricks notebook source
 """
-Dummy NiFi Conversion Agent for Testing Dynamic Job Creation
+Dummy NiFi Conversion Agent Notebook (Testing)
 
-This notebook simulates the behavior of a real AI agent that converts NiFi flows
-to Databricks notebooks. It's used for testing the dynamic job creation and
-history tracking system.
+This is a placeholder notebook that simulates the NiFi-to-Databricks conversion process.
+Used for testing dynamic job creation and history tracking before the real MLflow agent is ready.
 
 Expected Parameters:
-- flow_name: Flow identifier
-- nifi_xml_path: Path to NiFi XML file in UC volume
-- output_path: Where to save generated notebooks
-- attempt_id: Unique attempt identifier for history tracking
-- delta_table: History table name (default: main.default.nifi_conversion_history)
-
-The real agent (to be provided by agent team) will replace this with actual
-LLM-based conversion logic.
+  - flow_id: Flow identifier
+  - nifi_xml_path: Path to NiFi XML file in Unity Catalog volume
+  - output_path: Where to save generated notebooks
+  - attempt_id: Unique attempt identifier for history tracking
+  - delta_table: History table name (e.g., "main.default.nifi_conversion_history")
 """
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Parameter Setup
+# MAGIC ## Get Parameters
 
 # COMMAND ----------
 
-import time
-import os
-from datetime import datetime
-from pyspark.sql import SparkSession
-
-# Get parameters (passed by Databricks job)
-dbutils.widgets.text("flow_name", "", "Flow ID")
+# Get job parameters
+dbutils.widgets.text("flow_id", "", "Flow ID")
 dbutils.widgets.text("nifi_xml_path", "", "NiFi XML Path")
 dbutils.widgets.text("output_path", "", "Output Path")
 dbutils.widgets.text("attempt_id", "", "Attempt ID")
-dbutils.widgets.text("delta_table", "main.default.nifi_conversion_history", "History Table")
+dbutils.widgets.text("delta_table", "main.default.nifi_conversion_history", "Delta Table")
 
-flow_name = dbutils.widgets.get("flow_name")
+flow_id = dbutils.widgets.get("flow_id")
 nifi_xml_path = dbutils.widgets.get("nifi_xml_path")
 output_path = dbutils.widgets.get("output_path")
 attempt_id = dbutils.widgets.get("attempt_id")
 delta_table = dbutils.widgets.get("delta_table")
 
-print(f"Starting conversion for flow: {flow_name}")
-print(f"XML Path: {nifi_xml_path}")
+print("=" * 60)
+print("Dummy NiFi Conversion Agent Starting")
+print("=" * 60)
+print(f"Flow ID: {flow_id}")
+print(f"NiFi XML Path: {nifi_xml_path}")
 print(f"Output Path: {output_path}")
 print(f"Attempt ID: {attempt_id}")
-print(f"History Table: {delta_table}")
+print(f"Delta Table: {delta_table}")
+print("=" * 60)
+
+# Validate required parameters
+if not flow_id or not nifi_xml_path or not output_path or not attempt_id:
+    raise ValueError("Missing required parameters. All of flow_id, nifi_xml_path, output_path, and attempt_id are required.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Validation
+# MAGIC ## Validate XML File Exists
 
 # COMMAND ----------
 
-# Validate required parameters
-if not all([flow_name, nifi_xml_path, output_path, attempt_id]):
-    raise ValueError("Missing required parameters. All of flow_name, nifi_xml_path, output_path, and attempt_id are required.")
+from databricks.sdk import WorkspaceClient
+import time
 
-# Validate XML file exists (if path is in volume format)
-# For now, just log the path - real agent would read and parse the XML
-print(f"Validating NiFi XML at: {nifi_xml_path}")
+w = WorkspaceClient()
 
-# Update status to RUNNING
-spark = SparkSession.builder.getOrCreate()
+print(f"\n[Step 1/5] Validating XML file exists: {nifi_xml_path}")
+try:
+    # Try to download file to verify it exists
+    file_content = w.files.download(nifi_xml_path).contents.read()
+    file_size = len(file_content)
+    print(f"✅ XML file exists ({file_size:,} bytes)")
+
+    # Update history: RUNNING status
+    spark.sql(f"""
+        UPDATE {delta_table}
+        SET
+            status = 'RUNNING',
+            progress_percentage = 10,
+            status_message = 'Validated XML file exists'
+        WHERE attempt_id = '{attempt_id}'
+    """)
+
+except Exception as e:
+    print(f"❌ XML file not found or not accessible: {e}")
+    # Update history: FAILED
+    error_msg = str(e).replace("'", "''")
+    spark.sql(f"""
+        UPDATE {delta_table}
+        SET
+            status = 'FAILED',
+            error_message = 'XML file not found: {error_msg}',
+            completed_at = current_timestamp()
+        WHERE attempt_id = '{attempt_id}'
+    """)
+    dbutils.notebook.exit(f"FAILED: XML file not found - {e}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Simulate XML Parsing
+
+# COMMAND ----------
+
+print(f"\n[Step 2/5] Parsing NiFi XML (simulated)")
+time.sleep(5)  # Simulate parsing time
+
+print("✅ Parsed NiFi flow definition")
+print("  - Found 12 processors (simulated)")
+print("  - Found 8 connections (simulated)")
+print("  - Found 3 controller services (simulated)")
+
+# Update progress
 spark.sql(f"""
     UPDATE {delta_table}
     SET
-        status = 'RUNNING',
-        status_message = 'Validation complete, starting conversion',
-        progress_percentage = 10
+        progress_percentage = 25,
+        iterations = 1,
+        status_message = 'Parsed NiFi XML successfully'
     WHERE attempt_id = '{attempt_id}'
 """)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Simulated Conversion Process
+# MAGIC ## Simulate Agent Conversion
 
 # COMMAND ----------
 
-def update_progress(progress_pct, status_msg, iterations=0):
-    """Update progress in history table."""
+print(f"\n[Step 3/5] Converting NiFi flow to Databricks notebooks (simulated)")
+
+# Simulate multiple iterations
+iterations = 3
+for i in range(1, iterations + 1):
+    print(f"\n  Iteration {i}/{iterations}:")
+    print(f"    - Analyzing processor dependencies...")
+    time.sleep(3)
+    print(f"    - Generating PySpark code...")
+    time.sleep(3)
+    print(f"    - Validating generated code...")
+    time.sleep(2)
+
+    progress = 25 + (i * 20)
+    validation = min(i * 30, 90)
+
     spark.sql(f"""
         UPDATE {delta_table}
         SET
-            progress_percentage = {progress_pct},
-            status_message = '{status_msg}',
-            iterations = {iterations}
+            progress_percentage = {progress},
+            iterations = {i},
+            validation_percentage = {validation},
+            status_message = 'Iteration {i}/{iterations} completed'
         WHERE attempt_id = '{attempt_id}'
     """)
-    print(f"Progress: {progress_pct}% - {status_msg}")
 
-# Phase 1: Analyzing NiFi Flow (25%)
-print("\n=== Phase 1: Analyzing NiFi Flow ===")
-update_progress(25, "Analyzing NiFi flow structure", iterations=1)
-time.sleep(5)  # Simulate processing time
-
-# Phase 2: Generating Databricks Code (50%)
-print("\n=== Phase 2: Generating Databricks Code ===")
-update_progress(50, "Generating PySpark code from NiFi processors", iterations=2)
-time.sleep(5)
-
-# Phase 3: Creating Notebooks (75%)
-print("\n=== Phase 3: Creating Notebooks ===")
-update_progress(75, "Creating notebook files", iterations=3)
-time.sleep(5)
+print(f"\n✅ Conversion iterations complete")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Generate Dummy Notebooks
+# MAGIC ## Generate Dummy Output Notebooks
 
 # COMMAND ----------
+
+print(f"\n[Step 4/5] Generating output notebooks")
 
 # Create output directory if it doesn't exist
 try:
-    # For volume paths, create using dbutils
-    if output_path.startswith("/Volumes/"):
-        # Create directory structure
-        print(f"Creating output directory: {output_path}")
-        # Note: Volumes are automatically created in Databricks
-    else:
-        # For DBFS paths
-        dbutils.fs.mkdirs(output_path)
+    w.files.create_directory(output_path)
+    print(f"✅ Created output directory: {output_path}")
 except Exception as e:
-    print(f"Note: Output path may already exist or will be created: {e}")
+    print(f"  Note: Directory may already exist: {e}")
 
-# Generate 3 dummy notebooks
+# Generate dummy notebook files
 generated_notebooks = []
+
 notebook_templates = [
-    ("01_ingestion", "# NiFi Ingestion Converted\n\n# This notebook handles data ingestion\ndf = spark.read.format('delta').load('/path/to/source')\ndisplay(df)"),
-    ("02_transformation", "# NiFi Transformation Converted\n\n# This notebook handles data transformation\nfrom pyspark.sql.functions import col\ndf_transformed = df.withColumn('processed_at', current_timestamp())\ndisplay(df_transformed)"),
-    ("03_output", "# NiFi Output Converted\n\n# This notebook handles data output\ndf_transformed.write.format('delta').mode('overwrite').save('/path/to/output')")
+    {
+        "name": f"{flow_id}_ingestion.py",
+        "content": f"""# Databricks notebook source
+# DUMMY NOTEBOOK - Generated by test agent
+# Flow: {flow_id}
+# Purpose: Data Ingestion
+
+from pyspark.sql import SparkSession
+
+# This is a placeholder notebook
+print("Ingestion logic would go here")
+"""
+    },
+    {
+        "name": f"{flow_id}_transformation.py",
+        "content": f"""# Databricks notebook source
+# DUMMY NOTEBOOK - Generated by test agent
+# Flow: {flow_id}
+# Purpose: Data Transformation
+
+from pyspark.sql.functions import col, when
+
+# This is a placeholder notebook
+print("Transformation logic would go here")
+"""
+    },
+    {
+        "name": f"{flow_id}_output.py",
+        "content": f"""# Databricks notebook source
+# DUMMY NOTEBOOK - Generated by test agent
+# Flow: {flow_id}
+# Purpose: Data Output
+
+# This is a placeholder notebook
+print("Output logic would go here")
+"""
+    }
 ]
 
-for notebook_name, content in notebook_templates:
-    notebook_path = f"{output_path}/{notebook_name}.py"
-
-    # In a real implementation, this would write to Unity Catalog volumes
-    # For this dummy, we just create the path reference
-    generated_notebooks.append(notebook_path)
-    print(f"Generated: {notebook_path}")
-
-    # Optionally, write actual files if output_path is writable
+for notebook in notebook_templates:
+    notebook_path = f"{output_path}/{notebook['name']}"
     try:
-        if output_path.startswith("/Volumes/"):
-            # Write to volume
-            with open(f"/Volumes/{output_path.split('/Volumes/')[1]}/{notebook_name}.py", "w") as f:
-                f.write(content)
-        else:
-            # Write to DBFS
-            dbutils.fs.put(notebook_path, content, overwrite=True)
+        # Upload notebook content
+        w.files.upload(notebook_path, notebook['content'].encode('utf-8'), overwrite=True)
+        generated_notebooks.append(notebook_path)
+        print(f"  ✅ Created: {notebook_path}")
     except Exception as e:
-        print(f"Note: Could not write file (expected in test environment): {e}")
+        print(f"  ⚠️ Warning: Could not create {notebook_path}: {e}")
 
-update_progress(90, "Notebooks generated, finalizing", iterations=4)
-time.sleep(3)
+print(f"\n✅ Generated {len(generated_notebooks)} notebooks")
+
+# Update progress
+spark.sql(f"""
+    UPDATE {delta_table}
+    SET
+        progress_percentage = 90,
+        status_message = 'Generated output notebooks'
+    WHERE attempt_id = '{attempt_id}'
+""")
+
+time.sleep(2)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. Finalize and Update History
+# MAGIC ## Finalize and Mark Complete
 
 # COMMAND ----------
 
-# Calculate duration
-end_time = datetime.now()
+print(f"\n[Step 5/5] Finalizing conversion")
 
-# Prepare notebook array for SQL
-notebooks_sql = ", ".join([f"'{nb}'" for nb in generated_notebooks])
+# Prepare generated notebooks array for SQL
+if generated_notebooks:
+    notebooks_array = "ARRAY(" + ", ".join([f"'{nb}'" for nb in generated_notebooks]) + ")"
+else:
+    notebooks_array = "ARRAY()"
 
-# Update history table with success
+# Mark conversion as complete
 spark.sql(f"""
     UPDATE {delta_table}
     SET
         status = 'SUCCESS',
         progress_percentage = 100,
-        status_message = 'Conversion completed successfully',
+        validation_percentage = 100,
         completed_at = current_timestamp(),
-        generated_notebooks = ARRAY({notebooks_sql}),
-        iterations = 5,
-        validation_percentage = 95
+        generated_notebooks = {notebooks_array},
+        status_message = 'Conversion completed successfully (dummy agent)'
     WHERE attempt_id = '{attempt_id}'
 """)
 
-print("\n=== Conversion Complete ===")
-print(f"Status: SUCCESS")
-print(f"Generated {len(generated_notebooks)} notebooks:")
+print("=" * 60)
+print("✅ DUMMY CONVERSION COMPLETE")
+print("=" * 60)
+print(f"Attempt ID: {attempt_id}")
+print(f"Generated Notebooks: {len(generated_notebooks)}")
 for nb in generated_notebooks:
     print(f"  - {nb}")
+print("=" * 60)
+print("\n⚠️ NOTE: This was a SIMULATED conversion using dummy agent")
+print("Real conversions will use the MLflow agent application")
+print("=" * 60)
 
-# Return success
-dbutils.notebook.exit(f"SUCCESS: Generated {len(generated_notebooks)} notebooks for {flow_name}")
+# Exit successfully
+dbutils.notebook.exit(f"SUCCESS: Generated {len(generated_notebooks)} notebooks for {flow_id}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Summary
+
+# COMMAND ----------
+
+# Display final status (only runs if notebook doesn't exit above)
+spark.sql(f"""
+    SELECT
+        attempt_id,
+        flow_id,
+        status,
+        progress_percentage,
+        iterations,
+        validation_percentage,
+        started_at,
+        completed_at,
+        CAST((unix_timestamp(completed_at) - unix_timestamp(started_at)) AS INT) as duration_seconds
+    FROM {delta_table}
+    WHERE attempt_id = '{attempt_id}'
+""").show(truncate=False)
