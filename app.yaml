@@ -5,8 +5,18 @@ command: [
 ]
 
 env:
-  # Dynamic job creation - no pre-configured job ID needed
+  # Delta table configuration
   - name: DELTA_TABLE_NAME
-    value: "main.default.nifi_flows"
+    value: "eliao.nifi_to_databricks.nifi_flows"
+
+  # SQL Warehouse connection (for Delta table access via SQL Connector)
+  - name: DATABRICKS_SERVER_HOSTNAME
+    value: "${DATABRICKS_SERVER_HOSTNAME}"
+  - name: DATABRICKS_HTTP_PATH
+    value: "${DATABRICKS_HTTP_PATH}"
+  - name: DATABRICKS_TOKEN
+    value: "${DATABRICKS_TOKEN}"
+
+  # Agent notebook path
   - name: AGENT_NOTEBOOK_PATH
-    value: "/Workspace/Shared/nifi_conversion_dummy_agent"  # IMPORTANT: Upload notebooks/nifi_conversion_dummy_agent.py to this path in Databricks Workspace
+    value: "/Workspace/Users/eliao@bpcs.com/agentic_nifi_to_databricks/notebooks/nifi_conversion_dummy_agent"

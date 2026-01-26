@@ -1,45 +1,83 @@
 """
 Service for interacting with the nifi_flows Delta table.
+Uses Databricks SQL Connector for containerized app environments.
 """
 
 import os
 from typing import List, Optional
+from databricks import sql
 from models.nifi_flow_record import NiFiFlowRecord
 
 
 class DeltaService:
-    """Interface to read/write the nifi_flows Delta table."""
+    """Interface to read/write the nifi_flows Delta table via SQL Warehouse."""
 
-    def __init__(self, spark=None):
-        """
-        Initialize Delta service.
+    def __init__(self):
+        """Initialize with SQL Warehouse connection."""
+        self.server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+        self.http_path = os.getenv("DATABRICKS_HTTP_PATH")
+        self.access_token = os.getenv("DATABRICKS_TOKEN")
+        self.table_name = os.getenv("DELTA_TABLE_NAME", "eliao.nifi_to_databricks.nifi_flows")
+        self.history_table_name = "eliao.nifi_to_databricks.nifi_conversion_history"
 
-        Args:
-            spark: SparkSession instance. If None, will be created.
-        """
-        if spark is None:
-            from pyspark.sql import SparkSession
-            self.spark = SparkSession.builder.getOrCreate()
-        else:
-            self.spark = spark
+        # Validate configuration
+        if not all([self.server_hostname, self.http_path, self.access_token]):
+            raise ValueError(
+                "Missing required environment variables: "
+                "DATABRICKS_SERVER_HOSTNAME, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN"
+            )
 
-        self.table_name = os.getenv("DELTA_TABLE_NAME", "main.default.nifi_flows")
+        # Connection will be created per-query
+        self._connection = None
+
+    def _get_connection(self):
+        """Get or create SQL connection."""
+        if self._connection is None or not self._connection.open:
+            self._connection = sql.connect(
+                server_hostname=self.server_hostname,
+                http_path=self.http_path,
+                access_token=self.access_token
+            )
+        return self._connection
+
+    def _row_to_dict(self, row, description):
+        """Convert SQL result row to dictionary."""
+        return {col[0]: row[i] for i, col in enumerate(description)}
 
     def list_all_flows(self) -> List[NiFiFlowRecord]:
         """Get all flows from Delta table."""
         try:
-            df = self.spark.read.table(self.table_name)
-            rows = df.collect()
-            return [NiFiFlowRecord.from_row(row) for row in rows]
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT * FROM {self.table_name}")
+
+            # Fetch all rows and convert to NiFiFlowRecord objects
+            rows = cursor.fetchall()
+            description = cursor.description
+            cursor.close()
+
+            return [NiFiFlowRecord.from_dict(self._row_to_dict(row, description))
+                    for row in rows]
         except Exception as e:
             raise Exception(f"Failed to read flows from Delta table: {str(e)}")
 
     def get_flow(self, flow_name: str) -> Optional[NiFiFlowRecord]:
-        """Get a single flow by ID."""
+        """Get a single flow by name."""
         try:
-            df = self.spark.read.table(self.table_name)
-            rows = df.filter(df.flow_name == flow_name).collect()
-            return NiFiFlowRecord.from_row(rows[0]) if rows else None
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT * FROM {self.table_name} WHERE flow_name = ?",
+                (flow_name,)
+            )
+
+            row = cursor.fetchone()
+            description = cursor.description
+            cursor.close()
+
+            if row:
+                return NiFiFlowRecord.from_dict(self._row_to_dict(row, description))
+            return None
         except Exception as e:
             raise Exception(f"Failed to get flow {flow_name}: {str(e)}")
 
@@ -52,48 +90,51 @@ class DeltaService:
             updates: Dictionary of fields to update
         """
         try:
-            # Build SET clause
+            # Build SET clause and values
             set_clauses = []
+            values = []
+
             for key, value in updates.items():
                 if value is None:
                     set_clauses.append(f"{key} = NULL")
-                elif isinstance(value, str):
-                    # Escape single quotes in strings
-                    escaped_value = value.replace("'", "''")
-                    set_clauses.append(f"{key} = '{escaped_value}'")
-                elif isinstance(value, (int, float)):
-                    set_clauses.append(f"{key} = {value}")
-                elif isinstance(value, list):
-                    # Handle arrays
-                    array_str = ", ".join([f"'{item}'" for item in value])
-                    set_clauses.append(f"{key} = ARRAY({array_str})")
                 else:
-                    # Default string conversion
-                    set_clauses.append(f"{key} = '{str(value)}'")
+                    set_clauses.append(f"{key} = ?")
+                    values.append(value)
+
+            # Add last_updated
+            set_clauses.append("last_updated = current_timestamp()")
 
             set_clause = ", ".join(set_clauses)
+            values.append(flow_name)
 
-            # Execute update
-            sql = f"""
-                UPDATE {self.table_name}
-                SET {set_clause}, last_updated = current_timestamp()
-                WHERE flow_name = '{flow_name}'
-            """
-            self.spark.sql(sql)
-
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE {self.table_name} SET {set_clause} WHERE flow_name = ?",
+                values
+            )
+            cursor.close()
         except Exception as e:
             raise Exception(f"Failed to update flow {flow_name}: {str(e)}")
 
     def bulk_update_status(self, flow_names: List[str], status: str):
         """Update status for multiple flows."""
         try:
-            ids_str = "', '".join(flow_names)
-            sql = f"""
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # Build parameterized query with placeholders
+            placeholders = ", ".join(["?"] * len(flow_names))
+            sql_query = f"""
                 UPDATE {self.table_name}
-                SET status = '{status}', last_updated = current_timestamp()
-                WHERE flow_name IN ('{ids_str}')
+                SET status = ?, last_updated = current_timestamp()
+                WHERE flow_name IN ({placeholders})
             """
-            self.spark.sql(sql)
+
+            # Parameters: status first, then all flow names
+            params = [status] + flow_names
+            cursor.execute(sql_query, params)
+            cursor.close()
         except Exception as e:
             raise Exception(f"Failed to bulk update flows: {str(e)}")
 
@@ -110,17 +151,33 @@ class DeltaService:
             List of matching flows
         """
         try:
-            df = self.spark.read.table(self.table_name)
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # Build WHERE clause
+            where_clauses = []
+            params = []
 
             if query:
-                df = df.filter(df.flow_name.contains(query))
+                where_clauses.append("flow_name LIKE ?")
+                params.append(f"%{query}%")
             if status:
-                df = df.filter(df.status == status)
+                where_clauses.append("status = ?")
+                params.append(status)
             if server:
-                df = df.filter(df.server == server)
+                where_clauses.append("server = ?")
+                params.append(server)
 
-            rows = df.collect()
-            return [NiFiFlowRecord.from_row(row) for row in rows]
+            where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
+            sql_query = f"SELECT * FROM {self.table_name} WHERE {where_clause}"
+
+            cursor.execute(sql_query, params)
+            rows = cursor.fetchall()
+            description = cursor.description
+            cursor.close()
+
+            return [NiFiFlowRecord.from_dict(self._row_to_dict(row, description))
+                    for row in rows]
         except Exception as e:
             raise Exception(f"Failed to search flows: {str(e)}")
 
@@ -155,37 +212,36 @@ class DeltaService:
 
         attempt_number = (flow.total_attempts or 0) + 1
 
-        # Insert into history table
-        self.spark.sql(f"""
-            INSERT INTO main.default.nifi_conversion_history
-            (attempt_id, flow_name, databricks_job_id, job_name, status,
-             started_at, attempt_number, triggered_by)
-            VALUES (
-                '{attempt_id}',
-                '{flow_name}',
-                '{job_id}',
-                '{job_name}',
-                'CREATING',
-                current_timestamp(),
-                {attempt_number},
-                'user'
-            )
-        """)
+        conn = self._get_connection()
+        cursor = conn.cursor()
 
-        # Update flows table
-        self.spark.sql(f"""
-            UPDATE {self.table_name}
-            SET
-                current_attempt_id = '{attempt_id}',
-                total_attempts = {attempt_number},
-                last_attempt_at = current_timestamp(),
-                first_attempt_at = COALESCE(first_attempt_at, current_timestamp()),
-                status = 'CONVERTING',
-                last_updated = current_timestamp()
-            WHERE flow_name = '{flow_name}'
-        """)
+        try:
+            # Insert into history table
+            cursor.execute(f"""
+                INSERT INTO {self.history_table_name}
+                (attempt_id, flow_name, databricks_job_id, job_name, status,
+                 started_at, attempt_number, triggered_by)
+                VALUES (?, ?, ?, ?, 'CREATING', current_timestamp(), ?, 'user')
+            """, (attempt_id, flow_name, job_id, job_name, attempt_number))
 
-        return attempt_id
+            # Update flows table
+            cursor.execute(f"""
+                UPDATE {self.table_name}
+                SET
+                    current_attempt_id = ?,
+                    total_attempts = ?,
+                    last_attempt_at = current_timestamp(),
+                    first_attempt_at = COALESCE(first_attempt_at, current_timestamp()),
+                    status = 'CONVERTING',
+                    last_updated = current_timestamp()
+                WHERE flow_name = ?
+            """, (attempt_id, attempt_number, flow_name))
+
+            cursor.close()
+            return attempt_id
+        except Exception as e:
+            cursor.close()
+            raise Exception(f"Failed to create attempt: {str(e)}")
 
     def update_attempt_status(self, attempt_id: str, updates: dict):
         """
@@ -196,35 +252,31 @@ class DeltaService:
             updates: Dictionary of fields to update
         """
         try:
-            # Build SET clause
             set_clauses = []
+            values = []
+
             for key, value in updates.items():
                 if value is None:
                     set_clauses.append(f"{key} = NULL")
-                elif isinstance(value, str):
-                    # Escape single quotes in strings
-                    escaped_value = value.replace("'", "''")
-                    set_clauses.append(f"{key} = '{escaped_value}'")
-                elif isinstance(value, (int, float)):
-                    set_clauses.append(f"{key} = {value}")
                 elif isinstance(value, list):
-                    # Handle arrays
+                    # Handle arrays - convert to SQL array literal
                     array_str = ", ".join([f"'{item}'" for item in value])
                     set_clauses.append(f"{key} = ARRAY({array_str})")
                 else:
-                    # Default string conversion
-                    set_clauses.append(f"{key} = '{str(value)}'")
+                    set_clauses.append(f"{key} = ?")
+                    values.append(value)
 
             set_clause = ", ".join(set_clauses)
+            values.append(attempt_id)
 
-            # Execute update on history table
-            sql = f"""
-                UPDATE main.default.nifi_conversion_history
-                SET {set_clause}
-                WHERE attempt_id = '{attempt_id}'
-            """
-            self.spark.sql(sql)
-
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE {self.history_table_name} "
+                f"SET {set_clause} WHERE attempt_id = ?",
+                values
+            )
+            cursor.close()
         except Exception as e:
             raise Exception(f"Failed to update attempt {attempt_id}: {str(e)}")
 
@@ -240,14 +292,21 @@ class DeltaService:
             List of attempt dictionaries, sorted by started_at DESC
         """
         try:
-            df = self.spark.sql(f"""
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"""
                 SELECT *
-                FROM main.default.nifi_conversion_history
-                WHERE flow_name = '{flow_name}'
+                FROM {self.history_table_name}
+                WHERE flow_name = ?
                 ORDER BY started_at DESC
-                LIMIT {limit}
-            """)
-            return [row.asDict() for row in df.collect()]
+                LIMIT ?
+            """, (flow_name, limit))
+
+            rows = cursor.fetchall()
+            description = cursor.description
+            cursor.close()
+
+            return [self._row_to_dict(row, description) for row in rows]
         except Exception as e:
             raise Exception(f"Failed to get history for flow {flow_name}: {str(e)}")
 
@@ -266,12 +325,23 @@ class DeltaService:
             if not flow or not flow.current_attempt_id:
                 return None
 
-            df = self.spark.sql(f"""
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"""
                 SELECT *
-                FROM main.default.nifi_conversion_history
-                WHERE attempt_id = '{flow.current_attempt_id}'
-            """)
-            rows = df.collect()
-            return rows[0].asDict() if rows else None
+                FROM {self.history_table_name}
+                WHERE attempt_id = ?
+            """, (flow.current_attempt_id,))
+
+            row = cursor.fetchone()
+            description = cursor.description
+            cursor.close()
+
+            return self._row_to_dict(row, description) if row else None
         except Exception as e:
             raise Exception(f"Failed to get current attempt for flow {flow_name}: {str(e)}")
+
+    def close(self):
+        """Close connection."""
+        if self._connection and self._connection.open:
+            self._connection.close()

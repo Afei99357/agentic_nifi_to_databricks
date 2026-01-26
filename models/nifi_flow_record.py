@@ -75,6 +75,36 @@ class NiFiFlowRecord:
             status_message=row.get('status_message')
         )
 
+    @classmethod
+    def from_dict(cls, data: dict) -> 'NiFiFlowRecord':
+        """Create NiFiFlowRecord from dictionary (for SQL Connector results)."""
+        return cls(
+            flow_name=data.get('flow_name'),
+            server=data.get('server'),
+            nifi_xml_path=data.get('nifi_xml_path'),
+            description=data.get('description'),
+            priority=data.get('priority'),
+            owner=data.get('owner'),
+            status=data.get('status', 'NOT_STARTED'),
+            progress_percentage=data.get('progress_percentage', 0),
+            iterations=data.get('iterations', 0),
+            validation_percentage=data.get('validation_percentage', 0),
+            databricks_job_id=data.get('databricks_job_id'),
+            databricks_run_id=data.get('databricks_run_id'),
+            generated_notebooks=data.get('generated_notebooks', []),
+            error_message=data.get('error_message'),
+            status_message=data.get('status_message'),
+            total_attempts=data.get('total_attempts', 0),
+            successful_conversions=data.get('successful_conversions', 0),
+            current_attempt_id=data.get('current_attempt_id'),
+            last_attempt_at=data.get('last_attempt_at'),
+            first_attempt_at=data.get('first_attempt_at'),
+            created_at=data.get('created_at'),
+            last_updated=data.get('last_updated'),
+            conversion_started_at=data.get('conversion_started_at'),
+            conversion_completed_at=data.get('conversion_completed_at')
+        )
+
     def to_dict(self):
         """Convert to dictionary for JSON response."""
         return {

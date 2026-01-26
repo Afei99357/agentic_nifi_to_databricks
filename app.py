@@ -26,9 +26,18 @@ try:
     notebook_service = NotebookService(databricks_client)
     job_deployment_service = JobDeploymentService(databricks_client)
     logging.info("All services initialized successfully")
+except ValueError as e:
+    # Configuration error (missing env vars)
+    logging.error(f"Configuration error: {e}")
+    logging.error("Required environment variables: DATABRICKS_SERVER_HOSTNAME, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN")
+    logging.error("Please configure SQL Warehouse connection details in app settings")
+    databricks_client = None
+    delta_service = None
+    flow_service = None
+    notebook_service = None
+    job_deployment_service = None
 except Exception as e:
     logging.error(f"Failed to initialize services: {e}")
-    logging.error("Make sure this app is running in a Databricks environment with access to SparkSession")
     import traceback
     logging.error(traceback.format_exc())
     databricks_client = None
