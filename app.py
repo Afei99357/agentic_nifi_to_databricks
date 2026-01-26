@@ -170,35 +170,40 @@ def api_download_notebooks(flow_id: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/job/<job_id>/deploy-and-run', methods=['POST'])
-def api_deploy_and_run(job_id):
-    """Deploy notebooks as a Databricks job and run it."""
+@flask_app.route('/api/flows/<flow_id>/deploy-and-run', methods=['POST'])
+def api_deploy_and_run(flow_id):
+    """Deploy generated notebooks as a Databricks job and run it."""
     try:
-        job = agent_service.get_conversion_status(job_id)
-        if not job:
-            return jsonify({'success': False, 'error': 'Job not found'}), 404
+        # Get flow from Delta table
+        flow = delta_service.get_flow(flow_id)
+        if not flow:
+            return jsonify({'success': False, 'error': 'Flow not found'}), 404
+
+        if not flow.generated_notebooks:
+            return jsonify({'success': False, 'error': 'No notebooks generated yet'}), 400
 
         data = request.json
-        job_name = data.get('job_name', f'nifi_conversion_{job.source_file}')
+        job_name = data.get('job_name', f'nifi_execution_{flow.flow_name}')
         run_immediately = data.get('run_immediately', True)
 
         # Create notebook objects with volume paths
         from models.nifi_flow import Notebook
         notebooks = []
-        output_path = f"/Volumes/main/default/nifi_notebooks/{job.source_file}"
+        output_path = f"/Volumes/main/default/nifi_notebooks/{flow.flow_id}"
 
-        for notebook_name in job.generated_notebooks:
+        for notebook_path in flow.generated_notebooks:
+            notebook_name = os.path.basename(notebook_path)
             nb = Notebook(
                 notebook_id=notebook_name,
                 notebook_name=notebook_name,
-                flow_id=notebook_name.replace('.py', ''),
+                flow_id=flow.flow_id,
                 content=f"# Notebook: {notebook_name}\n",
                 language="python",
-                volume_path=f"{output_path}/{notebook_name}"
+                volume_path=notebook_path
             )
             notebooks.append(nb)
 
-        # Save notebooks to volume
+        # Save notebooks to volume (if needed)
         notebook_service.save_notebooks_to_volume(notebooks, output_path)
 
         # Create and optionally run job
