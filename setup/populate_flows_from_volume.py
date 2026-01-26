@@ -9,14 +9,20 @@ Usage:
   1. Update VOLUME_PATH variable below to point to your XML files
   2. Run in Databricks notebook
 
-Expected volume structure:
-  /Volumes/eliao/nifi_to_databricks/nifi_xmls/
+Expected volume structure (optional subdirectories for organizing by environment):
+  /Volumes/eliao/nifi_to_databricks/nifi_files/
     ├── prod/
     │   ├── nifi_flow1.xml
     │   └── nifi_flow2.xml
     ├── thailand/
     │   └── nifi_flow_3.xml
     └── ...
+
+Or flat structure (all XMLs in root):
+  /Volumes/eliao/nifi_to_databricks/nifi_files/
+    ├── nifi_flow1.xml
+    ├── nifi_flow2.xml
+    └── nifi_flow_3.xml
 """
 
 # COMMAND ----------
@@ -31,7 +37,7 @@ Expected volume structure:
 # Configuration - Change these if your catalog/schema names are different
 CATALOG = "eliao"
 SCHEMA = "nifi_to_databricks"
-VOLUME_NAME = "nifi_xmls"
+VOLUME_NAME = "nifi_files"
 
 # Derived paths
 VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME_NAME}"
@@ -54,32 +60,94 @@ w = WorkspaceClient()
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Debug: Check Volume Contents
+# MAGIC
+# MAGIC Run this cell to verify the volume exists and see what files are present
+
+# COMMAND ----------
+
+# Debug: List contents of volume to see what's actually there
+try:
+    print(f"Checking volume: {VOLUME_PATH}")
+    items = list(w.files.list_directory_contents(directory_path=VOLUME_PATH))
+
+    if len(items) == 0:
+        print("⚠️ Volume is EMPTY - no files or folders found")
+    else:
+        print(f"Found {len(items)} items in volume:")
+        for item in items[:20]:  # Show first 20 items
+            item_type = "DIR " if item.is_directory else "FILE"
+            print(f"  [{item_type}] {item.path}")
+        if len(items) > 20:
+            print(f"  ... and {len(items) - 20} more items")
+
+        # Count XML files
+        xml_count = sum(1 for item in items if not item.is_directory and item.path.endswith('.xml'))
+        print(f"\n📊 Summary: {xml_count} XML files found in root directory")
+
+except Exception as e:
+    print(f"❌ Error accessing volume: {e}")
+    print(f"   Please verify:")
+    print(f"   1. Volume exists: {VOLUME_PATH}")
+    print(f"   2. You have read permissions")
+    print(f"   3. Path is correct (check catalog.schema.volume names)")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Helper Functions
 
 # COMMAND ----------
 
 def scan_volume_for_xmls(volume_path):
-    """Recursively scan volume for XML files."""
+    """Recursively scan volume for ALL XML files in any subdirectory."""
     xml_files = []
+    dirs_scanned = 0
+    files_checked = 0
 
-    def scan_directory(path):
+    def scan_directory(path, depth=0):
+        nonlocal dirs_scanned, files_checked
         try:
-            items = w.files.list_directory_contents(directory_path=path)
+            dirs_scanned += 1
+            indent = "  " * depth
+            print(f"{indent}Scanning: {path}")
+
+            items = list(w.files.list_directory_contents(directory_path=path))
+            print(f"{indent}  Found {len(items)} items")
+
             for item in items:
                 if item.is_directory:
-                    # Recursively scan subdirectories
-                    scan_directory(item.path)
-                elif item.path.endswith('.xml'):
-                    xml_files.append(item.path)
-        except Exception as e:
-            print(f"Error scanning {path}: {e}")
+                    print(f"{indent}  [DIR] {item.path}")
+                    # Recursively scan ALL subdirectories
+                    scan_directory(item.path, depth + 1)
+                else:
+                    files_checked += 1
+                    if item.path.endswith('.xml'):
+                        print(f"{indent}  [XML] ✓ {item.path}")
+                        xml_files.append(item.path)
+                    else:
+                        # Show non-XML files too for debugging
+                        ext = item.path.split('.')[-1] if '.' in item.path else 'no-ext'
+                        print(f"{indent}  [.{ext}] {item.path}")
 
+        except Exception as e:
+            print(f"{indent}❌ Error scanning {path}: {e}")
+
+    print(f"Starting recursive scan from: {volume_path}\n")
     scan_directory(volume_path)
+
+    print(f"\n{'='*60}")
+    print(f"Scan complete:")
+    print(f"  - Directories scanned: {dirs_scanned}")
+    print(f"  - Files checked: {files_checked}")
+    print(f"  - XML files found: {len(xml_files)}")
+    print(f"{'='*60}\n")
+
     return xml_files
 
 # COMMAND ----------
 
-def extract_flow_info(xml_path, volume_name='nifi_xmls'):
+def extract_flow_info(xml_path, volume_name='nifi_files'):
     """Extract flow information from NiFi XML file."""
     try:
         # Extract flow_name from filename (without .xml extension)
@@ -87,11 +155,16 @@ def extract_flow_info(xml_path, volume_name='nifi_xmls'):
         flow_name = filename.replace('.xml', '')
 
         # Extract server/environment from path (e.g., "prod", "thailand")
+        # If file is in subdirectory: /Volumes/.../volume_name/server/file.xml
+        # If file is in root: /Volumes/.../volume_name/file.xml
         path_parts = xml_path.split('/')
-        server = 'unknown'
+        server = 'default'  # Default value if no subdirectory
         for i, part in enumerate(path_parts):
             if part == volume_name and i + 1 < len(path_parts):
-                server = path_parts[i + 1]
+                potential_server = path_parts[i + 1]
+                # If next part is not the filename, it's a subdirectory (server)
+                if potential_server != filename:
+                    server = potential_server
                 break
 
         # Optionally try to extract description from XML
