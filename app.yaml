@@ -3,3 +3,9 @@ command: [
   "-c",
   "flask --app app.py run --host 0.0.0.0 --port ${PORT:-8080}"
 ]
+
+env:
+  - name: NIFI_CONVERSION_JOB_ID
+    value: "REPLACE_WITH_ACTUAL_JOB_ID"  # Replace with actual Databricks job ID
+  - name: DELTA_TABLE_NAME
+    value: "main.default.nifi_flows"

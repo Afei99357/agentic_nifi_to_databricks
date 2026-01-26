@@ -5,12 +5,10 @@ from werkzeug.exceptions import HTTPException
 import io
 
 from utils.databricks_client import DatabricksClientWrapper
-from services.unity_catalog import UnityCatalogService
-from services.agent_service import AgentService
+from services.delta_service import DeltaService
+from services.flow_service import FlowService
 from services.notebook_service import NotebookService
-from services.nifi_parser import NiFiParser
 from services.job_deployment import JobDeploymentService
-from models.conversion_job import JobStatus
 
 # Configure logging
 log = logging.getLogger('werkzeug')
@@ -23,15 +21,15 @@ flask_app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
 # Initialize services
 try:
     databricks_client = DatabricksClientWrapper()
-    unity_catalog_service = UnityCatalogService(databricks_client)
-    agent_service = AgentService()
+    delta_service = DeltaService()
+    flow_service = FlowService(delta_service)
     notebook_service = NotebookService(databricks_client)
     job_deployment_service = JobDeploymentService(databricks_client)
 except Exception as e:
     logging.error(f"Failed to initialize services: {e}")
     databricks_client = None
-    unity_catalog_service = None
-    agent_service = None
+    delta_service = None
+    flow_service = None
     notebook_service = None
     job_deployment_service = None
 
@@ -39,189 +37,95 @@ except Exception as e:
 # ===== ROUTES =====
 
 @flask_app.route('/')
-def index():
-    """Landing page."""
-    return render_template('index.html')
-
-
-@flask_app.route('/step1')
-def step1():
-    """Step 1: File selection UI."""
-    return render_template('step1_select.html')
-
-
-@flask_app.route('/step2/<job_id>')
-def step2(job_id):
-    """Step 2: Review conversion results."""
-    return render_template('step2_review.html', job_id=job_id)
-
-
-@flask_app.route('/step3/<job_id>')
-def step3(job_id):
-    """Step 3: Deployment configuration."""
-    return render_template('step3_deploy.html', job_id=job_id)
-
-
-@flask_app.route('/step3b/<run_id>')
-def step3b(run_id):
-    """Step 3b: Execution monitoring."""
-    return render_template('step3b_monitor.html', run_id=run_id)
+def dashboard():
+    """Main dashboard showing all flows."""
+    return render_template('dashboard.html')
 
 
 # ===== API ROUTES =====
 
-@flask_app.route('/api/volumes', methods=['GET'])
-def api_list_volumes():
-    """List Unity Catalog volumes."""
-    try:
-        catalog = request.args.get('catalog', 'main')
-        schema = request.args.get('schema', 'default')
+# Flow Management Endpoints
 
-        volumes = unity_catalog_service.list_volumes(catalog, schema)
+@flask_app.route('/api/flows', methods=['GET'])
+def api_list_flows():
+    """Get all flows from Delta table."""
+    try:
+        flows = delta_service.list_all_flows()
         return jsonify({
             'success': True,
-            'volumes': [v.to_dict() for v in volumes]
+            'flows': [flow.to_dict() for flow in flows]
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/files', methods=['GET'])
-def api_list_files():
-    """List files in a volume path."""
+@flask_app.route('/api/flows/<flow_id>', methods=['GET'])
+def api_get_flow(flow_id: str):
+    """Get details for a specific flow with latest status."""
     try:
-        volume_path = request.args.get('path')
-        if not volume_path:
-            return jsonify({'success': False, 'error': 'Path parameter required'}), 400
+        # Poll latest status from Databricks if converting
+        flow_dict = flow_service.poll_flow_status(flow_id)
 
-        filter_xml = request.args.get('filter_xml', 'true').lower() == 'true'
-        files = unity_catalog_service.list_files(volume_path, filter_xml=filter_xml)
+        if not flow_dict:
+            return jsonify({'success': False, 'error': 'Flow not found'}), 404
 
         return jsonify({
             'success': True,
-            'files': [f.to_dict() for f in files]
+            'flow': flow_dict
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/file/preview', methods=['POST'])
-def api_preview_file():
-    """Preview a NiFi XML file."""
+@flask_app.route('/api/flows/<flow_id>/start', methods=['POST'])
+def api_start_conversion(flow_id: str):
+    """Kick off conversion job for a flow."""
+    try:
+        result = flow_service.start_conversion(flow_id)
+
+        if not result['success']:
+            return jsonify(result), 400
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@flask_app.route('/api/flows/bulk-start', methods=['POST'])
+def api_bulk_start_conversions():
+    """Start conversions for multiple flows."""
     try:
         data = request.json
-        file_path = data.get('file_path')
+        flow_ids = data.get('flow_ids', [])
 
-        if not file_path:
-            return jsonify({'success': False, 'error': 'File path required'}), 400
+        if not flow_ids:
+            return jsonify({'success': False, 'error': 'flow_ids required'}), 400
 
-        xml_content = unity_catalog_service.read_nifi_xml(file_path)
-        validation = unity_catalog_service.validate_xml_structure(xml_content)
-        preview = NiFiParser.get_xml_preview(xml_content)
-
-        return jsonify({
-            'success': True,
-            'preview': preview,
-            'is_valid': validation.is_valid,
-            'validation_message': validation.message
-        })
+        result = flow_service.start_bulk_conversions(flow_ids)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/convert', methods=['POST'])
-def api_start_conversion():
-    """Start conversion of NiFi XML to notebooks."""
+@flask_app.route('/api/flows/<flow_id>/stop', methods=['POST'])
+def api_stop_conversion(flow_id: str):
+    """Cancel a running conversion."""
     try:
-        data = request.json
-        file_path = data.get('file_path')
+        result = flow_service.stop_conversion(flow_id)
 
-        if not file_path:
-            return jsonify({'success': False, 'error': 'File path required'}), 400
+        if not result['success']:
+            return jsonify(result), 400
 
-        # Read XML content
-        xml_content = unity_catalog_service.read_nifi_xml(file_path)
-
-        # Validate XML
-        validation = unity_catalog_service.validate_xml_structure(xml_content)
-        if not validation.is_valid:
-            return jsonify({
-                'success': False,
-                'error': f'Invalid NiFi XML: {validation.message}'
-            }), 400
-
-        # Get user ID
-        user_id = databricks_client.get_current_user()
-
-        # Start conversion
-        source_file = os.path.basename(file_path)
-        source_volume_path = os.path.dirname(file_path)
-
-        job = agent_service.start_conversion(
-            nifi_xml=xml_content,
-            source_file=source_file,
-            source_volume_path=source_volume_path,
-            user_id=user_id
-        )
-
-        return jsonify({
-            'success': True,
-            'job': job.to_dict()
-        })
+        return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/job/<job_id>/status', methods=['GET'])
-def api_job_status(job_id):
-    """Get conversion job status (for polling)."""
+@flask_app.route('/api/flows/<flow_id>/notebooks', methods=['GET'])
+def api_get_notebooks(flow_id: str):
+    """Get list of generated notebooks for a flow."""
     try:
-        job = agent_service.get_conversion_status(job_id)
-        if not job:
-            return jsonify({'success': False, 'error': 'Job not found'}), 404
-
-        return jsonify({
-            'success': True,
-            'job': job.to_dict()
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@flask_app.route('/api/job/<job_id>/notebooks', methods=['GET'])
-def api_job_notebooks(job_id):
-    """Get generated notebooks for a job."""
-    try:
-        job = agent_service.get_conversion_status(job_id)
-        if not job:
-            return jsonify({'success': False, 'error': 'Job not found'}), 404
-
-        if job.status != JobStatus.COMPLETED:
-            return jsonify({
-                'success': False,
-                'error': f'Job not completed. Status: {job.status.value}'
-            }), 400
-
-        # Generate notebooks with preview
-        notebooks = []
-        for notebook_name in job.generated_notebooks:
-            # Create a simple notebook object for preview
-            from models.nifi_flow import Notebook
-            nb = Notebook(
-                notebook_id=notebook_name,
-                notebook_name=notebook_name,
-                flow_id=notebook_name.replace('.py', ''),
-                content=f"# Notebook: {notebook_name}\n# Generated from {job.source_file}\n",
-                language="python"
-            )
-            preview = notebook_service.get_notebook_preview(nb)
-            notebooks.append({
-                'notebook_id': nb.notebook_id,
-                'notebook_name': nb.notebook_name,
-                'flow_id': nb.flow_id,
-                'content': nb.content,
-                'preview_html': preview.highlighted_html
-            })
+        notebooks = flow_service.get_flow_notebooks(flow_id)
 
         return jsonify({
             'success': True,
@@ -231,56 +135,27 @@ def api_job_notebooks(job_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/job/<job_id>/download/<notebook_name>', methods=['GET'])
-def api_download_notebook(job_id, notebook_name):
-    """Download a specific notebook."""
+@flask_app.route('/api/flows/<flow_id>/download', methods=['GET'])
+def api_download_notebooks(flow_id: str):
+    """Download generated notebooks as ZIP."""
     try:
-        job = agent_service.get_conversion_status(job_id)
-        if not job:
-            return jsonify({'success': False, 'error': 'Job not found'}), 404
+        flow = delta_service.get_flow(flow_id)
 
-        if notebook_name not in job.generated_notebooks:
-            return jsonify({'success': False, 'error': 'Notebook not found'}), 404
+        if not flow or not flow.generated_notebooks:
+            return jsonify({'success': False, 'error': 'No notebooks found'}), 404
 
-        # Create notebook object
-        from models.nifi_flow import Notebook
-        nb = Notebook(
-            notebook_id=notebook_name,
-            notebook_name=notebook_name,
-            flow_id=notebook_name.replace('.py', ''),
-            content=f"# Notebook: {notebook_name}\n",
-            language="python"
-        )
-
-        content = notebook_service.download_notebook(nb)
-        return send_file(
-            io.BytesIO(content),
-            mimetype='text/x-python',
-            as_attachment=True,
-            download_name=notebook_name
-        )
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@flask_app.route('/api/job/<job_id>/download-all', methods=['GET'])
-def api_download_all_notebooks(job_id):
-    """Download all notebooks as a ZIP file."""
-    try:
-        job = agent_service.get_conversion_status(job_id)
-        if not job:
-            return jsonify({'success': False, 'error': 'Job not found'}), 404
-
-        # Create notebook objects
+        # Create notebook objects for download
         from models.nifi_flow import Notebook
         notebooks = []
-        for notebook_name in job.generated_notebooks:
+        for notebook_path in flow.generated_notebooks:
+            notebook_name = os.path.basename(notebook_path)
             nb = Notebook(
                 notebook_id=notebook_name,
                 notebook_name=notebook_name,
-                flow_id=notebook_name.replace('.py', ''),
-                content=f"# Notebook: {notebook_name}\n",
-                language="python"
+                flow_id=flow.flow_id,
+                content=f"# Notebook: {notebook_name}\n# Flow: {flow.flow_name}\n",
+                language="python",
+                volume_path=notebook_path
             )
             notebooks.append(nb)
 
@@ -289,7 +164,7 @@ def api_download_all_notebooks(job_id):
             io.BytesIO(zip_content),
             mimetype='application/zip',
             as_attachment=True,
-            download_name=f'notebooks_{job_id}.zip'
+            download_name=f'{flow.flow_name}_notebooks.zip'
         )
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

@@ -167,3 +167,18 @@ yarn-error.log*
 /blob-report/
 /playwright/*
 tsconfig.tsbuildinfo
+
+# Documentation files (keep local only, except README.md)
+REFACTORING_GUIDE.md
+IMPLEMENTATION_SUMMARY.md
+DEPLOYMENT_CHECKLIST.md
+CHANGES_SUMMARY.txt
+DEPLOYMENT.md
+DESIGN_PLAN.md
+QUICKSTART.md
+meeting_transcript.md
+meeting_trans_*.txt
+
+# Local examples and samples
+kick_off_job_example.py
+ui_sample.html
