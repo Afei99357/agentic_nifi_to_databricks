@@ -87,6 +87,8 @@ TBLPROPERTIES (
 )
 """)
 
+print(f"✅ Created table: {FLOWS_TABLE}")
+
 # COMMAND ----------
 
 # Add default values
@@ -96,6 +98,8 @@ spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN iterations SET DEFAULT 0")
 spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN validation_percentage SET DEFAULT 0")
 spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN created_at SET DEFAULT current_timestamp()")
 spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN last_updated SET DEFAULT current_timestamp()")
+
+print("✅ Default values configured")
 
 # COMMAND ----------
 
@@ -154,6 +158,8 @@ TBLPROPERTIES (
 )
 """)
 
+print(f"✅ Created table: {HISTORY_TABLE}")
+
 # COMMAND ----------
 
 # Add default values for history table
@@ -162,8 +168,12 @@ spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN progress_percentage SET DEF
 spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN iterations SET DEFAULT 0")
 spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN validation_percentage SET DEFAULT 0")
 
+print("✅ Default values configured")
+
 # Create index on flow_name for faster lookups
 spark.sql(f"CREATE INDEX IF NOT EXISTS idx_history_flow_name ON {HISTORY_TABLE}(flow_name)")
+
+print("✅ Index created on flow_name")
 
 # COMMAND ----------
 
