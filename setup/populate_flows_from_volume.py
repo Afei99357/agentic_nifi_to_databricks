@@ -1,12 +1,16 @@
+# Databricks notebook source
 """
 Populate nifi_flows table by scanning XML files in Unity Catalog volume.
+
+This notebook scans a Unity Catalog volume for NiFi XML files and populates
+the nifi_flows table with metadata extracted from the files.
 
 Usage:
   1. Update VOLUME_PATH variable below to point to your XML files
   2. Run in Databricks notebook
 
 Expected volume structure:
-  /Volumes/main/default/nifi_xmls/
+  /Volumes/eliao/nifi_to_databricks/nifi_xmls/
     ├── prod/
     │   ├── nifi_flow1.xml
     │   └── nifi_flow2.xml
@@ -15,19 +19,44 @@ Expected volume structure:
     └── ...
 """
 
-from pyspark.sql import SparkSession
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Configuration
+# MAGIC
+# MAGIC Update these if your catalog/schema names or volume path are different:
+
+# COMMAND ----------
+
+# Configuration - Change these if your catalog/schema names are different
+CATALOG = "eliao"
+SCHEMA = "nifi_to_databricks"
+VOLUME_NAME = "nifi_xmls"
+
+# Derived paths
+VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME_NAME}"
+TABLE_NAME = f"{CATALOG}.{SCHEMA}.nifi_flows"
+
+print(f"Configuration:")
+print(f"  - Volume path: {VOLUME_PATH}")
+print(f"  - Target table: {TABLE_NAME}")
+
+# COMMAND ----------
+
 from databricks.sdk import WorkspaceClient
 import xml.etree.ElementTree as ET
 from datetime import datetime
-import re
 
-# Configuration
-VOLUME_PATH = "/Volumes/main/default/nifi_xmls"
-TABLE_NAME = "main.default.nifi_flows"
-
-# Initialize
-spark = SparkSession.builder.getOrCreate()
+# spark is available in Databricks notebook runtime
+spark  # type: ignore
 w = WorkspaceClient()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Helper Functions
+
+# COMMAND ----------
 
 def scan_volume_for_xmls(volume_path):
     """Recursively scan volume for XML files."""
@@ -48,7 +77,9 @@ def scan_volume_for_xmls(volume_path):
     scan_directory(volume_path)
     return xml_files
 
-def extract_flow_info(xml_path):
+# COMMAND ----------
+
+def extract_flow_info(xml_path, volume_name='nifi_xmls'):
     """Extract flow information from NiFi XML file."""
     try:
         # Extract flow_name from filename (without .xml extension)
@@ -59,7 +90,7 @@ def extract_flow_info(xml_path):
         path_parts = xml_path.split('/')
         server = 'unknown'
         for i, part in enumerate(path_parts):
-            if part == 'nifi_xmls' and i + 1 < len(path_parts):
+            if part == volume_name and i + 1 < len(path_parts):
                 server = path_parts[i + 1]
                 break
 
@@ -94,6 +125,13 @@ def extract_flow_info(xml_path):
         print(f"Error processing {xml_path}: {e}")
         return None
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Main Population Function
+
+# COMMAND ----------
+
 def populate_flows_table():
     """Main function to populate nifi_flows table."""
     print(f"Scanning volume: {VOLUME_PATH}")
@@ -108,13 +146,14 @@ def populate_flows_table():
     flows = []
     for i, xml_path in enumerate(xml_files, 1):
         print(f"Processing {i}/{len(xml_files)}: {xml_path}")
-        flow_info = extract_flow_info(xml_path)
+        flow_info = extract_flow_info(xml_path, VOLUME_NAME)
         if flow_info:
             flows.append(flow_info)
 
     print(f"Successfully parsed {len(flows)} flows")
 
     # Create DataFrame
+    # type: ignore
     flows_df = spark.createDataFrame(flows)
 
     # Show preview
@@ -125,6 +164,7 @@ def populate_flows_table():
     # Use merge to handle duplicates based on flow_name
     flows_df.createOrReplaceTempView("new_flows")
 
+    # type: ignore
     spark.sql(f"""
         MERGE INTO {TABLE_NAME} AS target
         USING new_flows AS source
@@ -136,15 +176,31 @@ def populate_flows_table():
     print(f"\n✅ Successfully populated {len(flows)} flows into {TABLE_NAME}")
 
     # Verify
+    # type: ignore
     count = spark.sql(f"SELECT COUNT(*) FROM {TABLE_NAME}").collect()[0][0]
     print(f"Total flows in table: {count}")
 
-# Run the population
-if __name__ == "__main__":
-    populate_flows_table()
+# COMMAND ----------
 
-# Verify the results
-print("\n--- Final Verification ---")
+# MAGIC %md
+# MAGIC ## Run Population
+# MAGIC
+# MAGIC Execute the main population function to scan and load flows
+
+# COMMAND ----------
+
+populate_flows_table()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Final Verification
+# MAGIC
+# MAGIC Show summary by server/environment
+
+# COMMAND ----------
+
+# type: ignore
 spark.sql(f"""
     SELECT
         server,
