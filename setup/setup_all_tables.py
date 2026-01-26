@@ -47,7 +47,8 @@ print(f"  - History table: {HISTORY_TABLE}")
 
 # COMMAND ----------
 
-spark.sql(f"""  # type: ignore
+# type: ignore
+spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {FLOWS_TABLE} (
   -- Primary Key
   flow_name STRING NOT NULL COMMENT 'Flow name (XML filename without .xml extension)',
@@ -89,17 +90,17 @@ TBLPROPERTIES (
 # COMMAND ----------
 
 # Add default values
-spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN status SET DEFAULT 'NOT_STARTED'")  # type: ignore
-spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN progress_percentage SET DEFAULT 0")  # type: ignore
-spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN iterations SET DEFAULT 0")  # type: ignore
-spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN validation_percentage SET DEFAULT 0")  # type: ignore
-spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN created_at SET DEFAULT current_timestamp()")  # type: ignore
-spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN last_updated SET DEFAULT current_timestamp()")  # type: ignore
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN status SET DEFAULT 'NOT_STARTED'")
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN progress_percentage SET DEFAULT 0")
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN iterations SET DEFAULT 0")
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN validation_percentage SET DEFAULT 0")
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN created_at SET DEFAULT current_timestamp()")
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN last_updated SET DEFAULT current_timestamp()")
 
 # COMMAND ----------
 
 print("✅ Step 1: nifi_flows table created with defaults")
-spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)  # type: ignore
+spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
 
 # COMMAND ----------
 
@@ -110,7 +111,8 @@ spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)  # type: ignore
 
 # COMMAND ----------
 
-spark.sql(f"""  # type: ignore
+# type: ignore
+spark.sql(f"""
 CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (
   -- Primary Key
   attempt_id STRING NOT NULL COMMENT 'Unique identifier for this conversion attempt',
@@ -155,18 +157,18 @@ TBLPROPERTIES (
 # COMMAND ----------
 
 # Add default values for history table
-spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN started_at SET DEFAULT current_timestamp()")  # type: ignore
-spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN progress_percentage SET DEFAULT 0")  # type: ignore
-spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN iterations SET DEFAULT 0")  # type: ignore
-spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN validation_percentage SET DEFAULT 0")  # type: ignore
+spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN started_at SET DEFAULT current_timestamp()")
+spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN progress_percentage SET DEFAULT 0")
+spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN iterations SET DEFAULT 0")
+spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN validation_percentage SET DEFAULT 0")
 
 # Create index on flow_name for faster lookups
-spark.sql(f"CREATE INDEX IF NOT EXISTS idx_history_flow_name ON {HISTORY_TABLE}(flow_name)")  # type: ignore
+spark.sql(f"CREATE INDEX IF NOT EXISTS idx_history_flow_name ON {HISTORY_TABLE}(flow_name)")
 
 # COMMAND ----------
 
 print("✅ Step 2: nifi_conversion_history table created with defaults")
-spark.sql(f"DESCRIBE TABLE {HISTORY_TABLE}").show(truncate=False)  # type: ignore
+spark.sql(f"DESCRIBE TABLE {HISTORY_TABLE}").show(truncate=False)
 
 # COMMAND ----------
 
@@ -179,7 +181,8 @@ spark.sql(f"DESCRIBE TABLE {HISTORY_TABLE}").show(truncate=False)  # type: ignor
 
 # Add new columns for history tracking
 try:
-    spark.sql(f"""  # type: ignore
+    # type: ignore
+    spark.sql(f"""
         ALTER TABLE {FLOWS_TABLE}
         ADD COLUMNS (
           current_attempt_id STRING COMMENT 'Reference to current attempt in history table',
@@ -198,13 +201,13 @@ except Exception as e:
 # COMMAND ----------
 
 # Set default values for new columns
-spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN total_attempts SET DEFAULT 0")  # type: ignore
-spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN successful_conversions SET DEFAULT 0")  # type: ignore
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN total_attempts SET DEFAULT 0")
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN successful_conversions SET DEFAULT 0")
 
 # COMMAND ----------
 
 print("✅ Step 3: History tracking columns added to nifi_flows with defaults")
-spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)  # type: ignore
+spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
 
 # COMMAND ----------
 
@@ -218,7 +221,8 @@ spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)  # type: ignore
 # COMMAND ----------
 
 # Check if there are any flows with existing conversion data
-existing_conversions = spark.sql(f"""  # type: ignore
+# type: ignore
+existing_conversions = spark.sql(f"""
     SELECT COUNT(*) as count
     FROM {FLOWS_TABLE}
     WHERE databricks_run_id IS NOT NULL
@@ -229,7 +233,8 @@ if existing_conversions > 0:
     print("Migrating to history table...")
 
     # Migrate existing conversion runs to history table
-    spark.sql(f"""  # type: ignore
+    # type: ignore
+    spark.sql(f"""
         INSERT INTO {HISTORY_TABLE} (
           attempt_id,
           flow_name,
@@ -281,7 +286,8 @@ if existing_conversions > 0:
     """)
 
     # Update flows table with references to migrated history
-    spark.sql(f"""  # type: ignore
+    # type: ignore
+    spark.sql(f"""
         UPDATE {FLOWS_TABLE}
         SET
           current_attempt_id = CONCAT(flow_name, '_attempt_migrated'),
@@ -304,8 +310,8 @@ else:
 # COMMAND ----------
 
 # Show table counts
-flows_count = spark.sql(f"SELECT COUNT(*) as count FROM {FLOWS_TABLE}").collect()[0]['count']  # type: ignore
-history_count = spark.sql(f"SELECT COUNT(*) as count FROM {HISTORY_TABLE}").collect()[0]['count']  # type: ignore
+flows_count = spark.sql(f"SELECT COUNT(*) as count FROM {FLOWS_TABLE}").collect()[0]['count']
+history_count = spark.sql(f"SELECT COUNT(*) as count FROM {HISTORY_TABLE}").collect()[0]['count']
 
 print("=" * 60)
 print("SETUP COMPLETE ✅")
@@ -327,7 +333,8 @@ print("=" * 60)
 # Show sample data if any flows exist
 if flows_count > 0:
     print("\nSample flows:")
-    spark.sql(f"""  # type: ignore
+    # type: ignore
+    spark.sql(f"""
         SELECT
             flow_name,
             server,
