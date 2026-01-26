@@ -55,7 +55,7 @@ class DeltaService:
         self._connection = None
 
     def _get_connection(self):
-        """Get or create SQL connection."""
+        """Get or create SQL connection with timeout settings."""
         if self._connection is None or not self._connection.open:
             if self.use_oauth:
                 # Use OAuth authentication (Databricks Apps native)
@@ -63,14 +63,18 @@ class DeltaService:
                     server_hostname=self.server_hostname,
                     http_path=self.http_path,
                     client_id=self.client_id,
-                    client_secret=self.client_secret
+                    client_secret=self.client_secret,
+                    _socket_timeout=60,  # 60 second timeout
+                    _tls_no_verify=False
                 )
             else:
                 # Use PAT authentication (local development)
                 self._connection = sql.connect(
                     server_hostname=self.server_hostname,
                     http_path=self.http_path,
-                    access_token=self.access_token
+                    access_token=self.access_token,
+                    _socket_timeout=60,  # 60 second timeout
+                    _tls_no_verify=False
                 )
         return self._connection
 
@@ -80,19 +84,28 @@ class DeltaService:
 
     def list_all_flows(self) -> List[NiFiFlowRecord]:
         """Get all flows from Delta table."""
+        import logging
         try:
+            logging.info(f"Connecting to SQL Warehouse to query {self.table_name}")
             conn = self._get_connection()
+            logging.info("Connection established, creating cursor")
             cursor = conn.cursor()
+
+            logging.info(f"Executing query: SELECT * FROM {self.table_name}")
             cursor.execute(f"SELECT * FROM {self.table_name}")
 
             # Fetch all rows and convert to NiFiFlowRecord objects
+            logging.info("Fetching rows...")
             rows = cursor.fetchall()
             description = cursor.description
             cursor.close()
 
+            logging.info(f"Successfully fetched {len(rows)} rows from Delta table")
             return [NiFiFlowRecord.from_dict(self._row_to_dict(row, description))
                     for row in rows]
         except Exception as e:
+            import logging
+            logging.error(f"Error in list_all_flows: {type(e).__name__}: {str(e)}")
             raise Exception(f"Failed to read flows from Delta table: {str(e)}")
 
     def get_flow(self, flow_name: str) -> Optional[NiFiFlowRecord]:
