@@ -1,0 +1,3 @@
+DEPLOYMENT_VERSION=2026-01-26-19:52
+COMMIT=fa1f063
+EXPECTED_BEHAVIOR=No unity_catalog imports, should use delta_service instead
