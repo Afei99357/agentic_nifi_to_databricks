@@ -25,10 +25,14 @@ After running this, you can use setup/populate_flows_from_volume.py to load your
 
 # COMMAND ----------
 
+# Configuration - Change these if your catalog/schema names are different
 CATALOG = "main"
 SCHEMA = "default"
 FLOWS_TABLE = f"{CATALOG}.{SCHEMA}.nifi_flows"
 HISTORY_TABLE = f"{CATALOG}.{SCHEMA}.nifi_conversion_history"
+
+# spark is available in Databricks notebook runtime
+spark  # type: ignore
 
 print(f"Setting up tables:")
 print(f"  - Flows table: {FLOWS_TABLE}")
@@ -43,86 +47,59 @@ print(f"  - History table: {HISTORY_TABLE}")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Create the table first without defaults
-# MAGIC CREATE TABLE IF NOT EXISTS main.default.nifi_flows (
-# MAGIC   -- Primary Key
-# MAGIC   flow_name STRING NOT NULL COMMENT 'Flow name (XML filename without .xml extension)',
-# MAGIC
-# MAGIC   -- Flow Metadata (Pre-populated from XML)
-# MAGIC   server STRING NOT NULL COMMENT 'NiFi server/environment (derived from folder path)',
-# MAGIC   nifi_xml_path STRING NOT NULL COMMENT 'Path to XML file in UC volume',
-# MAGIC   description STRING COMMENT 'Flow description (extracted from XML if available)',
-# MAGIC   priority STRING COMMENT 'P0, P1, P2 for prioritization',
-# MAGIC   owner STRING COMMENT 'Team or pod responsible (Pod-A, Pod-B, etc.)',
-# MAGIC
-# MAGIC   -- Conversion Status (Updated by app during conversion)
-# MAGIC   status STRING NOT NULL COMMENT 'NOT_STARTED | CONVERTING | DONE | NEEDS_ATTENTION',
-# MAGIC   databricks_job_id STRING COMMENT 'Databricks job ID for conversion',
-# MAGIC   databricks_run_id STRING COMMENT 'Current or last run ID',
-# MAGIC   progress_percentage INT COMMENT 'Estimated progress 0-100',
-# MAGIC   iterations INT COMMENT 'Number of agent iterations',
-# MAGIC   validation_percentage INT COMMENT 'Validation coverage 0-100',
-# MAGIC
-# MAGIC   -- Timestamps
-# MAGIC   created_at TIMESTAMP COMMENT 'When flow was added to table',
-# MAGIC   last_updated TIMESTAMP COMMENT 'Last status update',
-# MAGIC   conversion_started_at TIMESTAMP COMMENT 'When conversion started',
-# MAGIC   conversion_completed_at TIMESTAMP COMMENT 'When conversion finished',
-# MAGIC
-# MAGIC   -- Results & Errors
-# MAGIC   generated_notebooks ARRAY<STRING> COMMENT 'List of generated notebook paths',
-# MAGIC   error_message STRING COMMENT 'Error details if failed',
-# MAGIC   status_message STRING COMMENT 'Human-readable status message',
-# MAGIC
-# MAGIC   PRIMARY KEY (flow_name)
-# MAGIC )
-# MAGIC TBLPROPERTIES (
-# MAGIC   'delta.enableChangeDataFeed' = 'true',
-# MAGIC   'delta.feature.allowColumnDefaults' = 'supported'
-# MAGIC );
+spark.sql(f"""  # type: ignore
+CREATE TABLE IF NOT EXISTS {FLOWS_TABLE} (
+  -- Primary Key
+  flow_name STRING NOT NULL COMMENT 'Flow name (XML filename without .xml extension)',
+
+  -- Flow Metadata (Pre-populated from XML)
+  server STRING NOT NULL COMMENT 'NiFi server/environment (derived from folder path)',
+  nifi_xml_path STRING NOT NULL COMMENT 'Path to XML file in UC volume',
+  description STRING COMMENT 'Flow description (extracted from XML if available)',
+  priority STRING COMMENT 'P0, P1, P2 for prioritization',
+  owner STRING COMMENT 'Team or pod responsible (Pod-A, Pod-B, etc.)',
+
+  -- Conversion Status (Updated by app during conversion)
+  status STRING NOT NULL COMMENT 'NOT_STARTED | CONVERTING | DONE | NEEDS_ATTENTION',
+  databricks_job_id STRING COMMENT 'Databricks job ID for conversion',
+  databricks_run_id STRING COMMENT 'Current or last run ID',
+  progress_percentage INT COMMENT 'Estimated progress 0-100',
+  iterations INT COMMENT 'Number of agent iterations',
+  validation_percentage INT COMMENT 'Validation coverage 0-100',
+
+  -- Timestamps
+  created_at TIMESTAMP COMMENT 'When flow was added to table',
+  last_updated TIMESTAMP COMMENT 'Last status update',
+  conversion_started_at TIMESTAMP COMMENT 'When conversion started',
+  conversion_completed_at TIMESTAMP COMMENT 'When conversion finished',
+
+  -- Results & Errors
+  generated_notebooks ARRAY<STRING> COMMENT 'List of generated notebook paths',
+  error_message STRING COMMENT 'Error details if failed',
+  status_message STRING COMMENT 'Human-readable status message',
+
+  PRIMARY KEY (flow_name)
+)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'true',
+  'delta.feature.allowColumnDefaults' = 'supported'
+)
+""")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Now add the default values
-# MAGIC ALTER TABLE main.default.nifi_flows
-# MAGIC ALTER COLUMN status SET DEFAULT 'NOT_STARTED';
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC ALTER TABLE main.default.nifi_flows
-# MAGIC ALTER COLUMN progress_percentage SET DEFAULT 0;
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC ALTER TABLE main.default.nifi_flows
-# MAGIC ALTER COLUMN iterations SET DEFAULT 0;
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC ALTER TABLE main.default.nifi_flows
-# MAGIC ALTER COLUMN validation_percentage SET DEFAULT 0;
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC ALTER TABLE main.default.nifi_flows
-# MAGIC ALTER COLUMN created_at SET DEFAULT current_timestamp();
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC ALTER TABLE main.default.nifi_flows
-# MAGIC ALTER COLUMN last_updated SET DEFAULT current_timestamp();
+# Add default values
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN status SET DEFAULT 'NOT_STARTED'")  # type: ignore
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN progress_percentage SET DEFAULT 0")  # type: ignore
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN iterations SET DEFAULT 0")  # type: ignore
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN validation_percentage SET DEFAULT 0")  # type: ignore
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN created_at SET DEFAULT current_timestamp()")  # type: ignore
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN last_updated SET DEFAULT current_timestamp()")  # type: ignore
 
 # COMMAND ----------
 
 print("✅ Step 1: nifi_flows table created with defaults")
-spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
+spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)  # type: ignore
 
 # COMMAND ----------
 
@@ -133,83 +110,63 @@ spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE TABLE IF NOT EXISTS main.default.nifi_conversion_history (
-# MAGIC   -- Primary Key
-# MAGIC   attempt_id STRING NOT NULL COMMENT 'Unique identifier for this conversion attempt',
-# MAGIC
-# MAGIC   -- Foreign Key
-# MAGIC   flow_name STRING NOT NULL COMMENT 'References nifi_flows.flow_name',
-# MAGIC
-# MAGIC   -- Job Information
-# MAGIC   databricks_job_id STRING NOT NULL COMMENT 'Databricks job ID created for this attempt',
-# MAGIC   databricks_run_id STRING COMMENT 'Databricks run ID when job starts',
-# MAGIC   job_name STRING COMMENT 'Name of the Databricks job',
-# MAGIC
-# MAGIC   -- Attempt Status
-# MAGIC   status STRING NOT NULL COMMENT 'CREATING | RUNNING | SUCCESS | FAILED | CANCELLED',
-# MAGIC   started_at TIMESTAMP NOT NULL COMMENT 'When this attempt started',
-# MAGIC   completed_at TIMESTAMP COMMENT 'When this attempt finished',
-# MAGIC   duration_seconds INT COMMENT 'Total duration in seconds',
-# MAGIC
-# MAGIC   -- Progress Metrics (updated by agent during conversion)
-# MAGIC   progress_percentage INT COMMENT 'Conversion progress 0-100',
-# MAGIC   iterations INT COMMENT 'Number of agent iterations',
-# MAGIC   validation_percentage INT COMMENT 'Validation coverage 0-100',
-# MAGIC
-# MAGIC   -- Results
-# MAGIC   generated_notebooks ARRAY<STRING> COMMENT 'List of generated notebook paths',
-# MAGIC   error_message STRING COMMENT 'Error details if failed',
-# MAGIC   status_message STRING COMMENT 'Human-readable status message',
-# MAGIC
-# MAGIC   -- Metadata
-# MAGIC   attempt_number INT COMMENT 'Sequential attempt number for this flow (1, 2, 3...)',
-# MAGIC   triggered_by STRING COMMENT 'user | retry | scheduled',
-# MAGIC
-# MAGIC   PRIMARY KEY (attempt_id)
-# MAGIC )
-# MAGIC TBLPROPERTIES (
-# MAGIC   'delta.enableChangeDataFeed' = 'true',
-# MAGIC   'delta.feature.allowColumnDefaults' = 'supported',
-# MAGIC   'description' = 'Tracks all NiFi flow conversion attempts for history and auditing'
-# MAGIC );
+spark.sql(f"""  # type: ignore
+CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (
+  -- Primary Key
+  attempt_id STRING NOT NULL COMMENT 'Unique identifier for this conversion attempt',
+
+  -- Foreign Key
+  flow_name STRING NOT NULL COMMENT 'References nifi_flows.flow_name',
+
+  -- Job Information
+  databricks_job_id STRING NOT NULL COMMENT 'Databricks job ID created for this attempt',
+  databricks_run_id STRING COMMENT 'Databricks run ID when job starts',
+  job_name STRING COMMENT 'Name of the Databricks job',
+
+  -- Attempt Status
+  status STRING NOT NULL COMMENT 'CREATING | RUNNING | SUCCESS | FAILED | CANCELLED',
+  started_at TIMESTAMP NOT NULL COMMENT 'When this attempt started',
+  completed_at TIMESTAMP COMMENT 'When this attempt finished',
+  duration_seconds INT COMMENT 'Total duration in seconds',
+
+  -- Progress Metrics (updated by agent during conversion)
+  progress_percentage INT COMMENT 'Conversion progress 0-100',
+  iterations INT COMMENT 'Number of agent iterations',
+  validation_percentage INT COMMENT 'Validation coverage 0-100',
+
+  -- Results
+  generated_notebooks ARRAY<STRING> COMMENT 'List of generated notebook paths',
+  error_message STRING COMMENT 'Error details if failed',
+  status_message STRING COMMENT 'Human-readable status message',
+
+  -- Metadata
+  attempt_number INT COMMENT 'Sequential attempt number for this flow (1, 2, 3...)',
+  triggered_by STRING COMMENT 'user | retry | scheduled',
+
+  PRIMARY KEY (attempt_id)
+)
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'true',
+  'delta.feature.allowColumnDefaults' = 'supported',
+  'description' = 'Tracks all NiFi flow conversion attempts for history and auditing'
+)
+""")
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Add default values for history table
-# MAGIC ALTER TABLE main.default.nifi_conversion_history
-# MAGIC ALTER COLUMN started_at SET DEFAULT current_timestamp();
+# Add default values for history table
+spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN started_at SET DEFAULT current_timestamp()")  # type: ignore
+spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN progress_percentage SET DEFAULT 0")  # type: ignore
+spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN iterations SET DEFAULT 0")  # type: ignore
+spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN validation_percentage SET DEFAULT 0")  # type: ignore
 
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC ALTER TABLE main.default.nifi_conversion_history
-# MAGIC ALTER COLUMN progress_percentage SET DEFAULT 0;
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC ALTER TABLE main.default.nifi_conversion_history
-# MAGIC ALTER COLUMN iterations SET DEFAULT 0;
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC ALTER TABLE main.default.nifi_conversion_history
-# MAGIC ALTER COLUMN validation_percentage SET DEFAULT 0;
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC -- Create index on flow_name for faster lookups
-# MAGIC CREATE INDEX IF NOT EXISTS idx_history_flow_name
-# MAGIC ON main.default.nifi_conversion_history(flow_name);
+# Create index on flow_name for faster lookups
+spark.sql(f"CREATE INDEX IF NOT EXISTS idx_history_flow_name ON {HISTORY_TABLE}(flow_name)")  # type: ignore
 
 # COMMAND ----------
 
 print("✅ Step 2: nifi_conversion_history table created with defaults")
-spark.sql(f"DESCRIBE TABLE {HISTORY_TABLE}").show(truncate=False)
+spark.sql(f"DESCRIBE TABLE {HISTORY_TABLE}").show(truncate=False)  # type: ignore
 
 # COMMAND ----------
 
@@ -220,34 +177,34 @@ spark.sql(f"DESCRIBE TABLE {HISTORY_TABLE}").show(truncate=False)
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Add new columns for history tracking (without defaults first)
-# MAGIC ALTER TABLE main.default.nifi_flows
-# MAGIC ADD COLUMNS IF NOT EXISTS (
-# MAGIC   current_attempt_id STRING COMMENT 'Reference to current attempt in history table',
-# MAGIC   total_attempts INT COMMENT 'Total number of conversion attempts',
-# MAGIC   successful_conversions INT COMMENT 'Number of successful conversions',
-# MAGIC   last_attempt_at TIMESTAMP COMMENT 'Timestamp of most recent attempt',
-# MAGIC   first_attempt_at TIMESTAMP COMMENT 'Timestamp of first attempt'
-# MAGIC );
+# Add new columns for history tracking
+try:
+    spark.sql(f"""  # type: ignore
+        ALTER TABLE {FLOWS_TABLE}
+        ADD COLUMNS (
+          current_attempt_id STRING COMMENT 'Reference to current attempt in history table',
+          total_attempts INT COMMENT 'Total number of conversion attempts',
+          successful_conversions INT COMMENT 'Number of successful conversions',
+          last_attempt_at TIMESTAMP COMMENT 'Timestamp of most recent attempt',
+          first_attempt_at TIMESTAMP COMMENT 'Timestamp of first attempt'
+        )
+    """)
+except Exception as e:
+    if "already exists" in str(e).lower():
+        print("Columns already exist, skipping...")
+    else:
+        raise
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC -- Set default values for new columns
-# MAGIC ALTER TABLE main.default.nifi_flows
-# MAGIC ALTER COLUMN total_attempts SET DEFAULT 0;
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC ALTER TABLE main.default.nifi_flows
-# MAGIC ALTER COLUMN successful_conversions SET DEFAULT 0;
+# Set default values for new columns
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN total_attempts SET DEFAULT 0")  # type: ignore
+spark.sql(f"ALTER TABLE {FLOWS_TABLE} ALTER COLUMN successful_conversions SET DEFAULT 0")  # type: ignore
 
 # COMMAND ----------
 
 print("✅ Step 3: History tracking columns added to nifi_flows with defaults")
-spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
+spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)  # type: ignore
 
 # COMMAND ----------
 
@@ -261,7 +218,7 @@ spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
 # COMMAND ----------
 
 # Check if there are any flows with existing conversion data
-existing_conversions = spark.sql(f"""
+existing_conversions = spark.sql(f"""  # type: ignore
     SELECT COUNT(*) as count
     FROM {FLOWS_TABLE}
     WHERE databricks_run_id IS NOT NULL
@@ -272,7 +229,7 @@ if existing_conversions > 0:
     print("Migrating to history table...")
 
     # Migrate existing conversion runs to history table
-    spark.sql(f"""
+    spark.sql(f"""  # type: ignore
         INSERT INTO {HISTORY_TABLE} (
           attempt_id,
           flow_name,
@@ -324,7 +281,7 @@ if existing_conversions > 0:
     """)
 
     # Update flows table with references to migrated history
-    spark.sql(f"""
+    spark.sql(f"""  # type: ignore
         UPDATE {FLOWS_TABLE}
         SET
           current_attempt_id = CONCAT(flow_name, '_attempt_migrated'),
@@ -347,8 +304,8 @@ else:
 # COMMAND ----------
 
 # Show table counts
-flows_count = spark.sql(f"SELECT COUNT(*) as count FROM {FLOWS_TABLE}").collect()[0]['count']
-history_count = spark.sql(f"SELECT COUNT(*) as count FROM {HISTORY_TABLE}").collect()[0]['count']
+flows_count = spark.sql(f"SELECT COUNT(*) as count FROM {FLOWS_TABLE}").collect()[0]['count']  # type: ignore
+history_count = spark.sql(f"SELECT COUNT(*) as count FROM {HISTORY_TABLE}").collect()[0]['count']  # type: ignore
 
 print("=" * 60)
 print("SETUP COMPLETE ✅")
@@ -358,7 +315,7 @@ print(f"  - Flows table: {flows_count} flows")
 print(f"  - History table: {history_count} attempts")
 print(f"\n📋 Next Steps:")
 print(f"  1. Upload NiFi XML files to Unity Catalog volume")
-print(f"     Example: /Volumes/main/default/nifi_xmls/")
+print(f"     Example: /Volumes/{CATALOG}/{SCHEMA}/nifi_xmls/")
 print(f"  2. Run setup/populate_flows_from_volume.py to scan and load flows")
 print(f"  3. Upload notebooks/nifi_conversion_dummy_agent.py to:")
 print(f"     /Workspace/Shared/nifi_conversion_dummy_agent")
@@ -370,7 +327,7 @@ print("=" * 60)
 # Show sample data if any flows exist
 if flows_count > 0:
     print("\nSample flows:")
-    spark.sql(f"""
+    spark.sql(f"""  # type: ignore
         SELECT
             flow_name,
             server,
