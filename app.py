@@ -67,12 +67,60 @@ def api_list_flows():
 
     try:
         flows = delta_service.list_all_flows()
+        flow_dicts = [flow.to_dict() for flow in flows]
+        logging.info(f"Successfully fetched {len(flow_dicts)} flows from Delta table")
         return jsonify({
             'success': True,
-            'flows': [flow.to_dict() for flow in flows]
+            'flows': flow_dicts,
+            'count': len(flow_dicts)
         })
     except Exception as e:
+        logging.error(f"Error fetching flows: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@flask_app.route('/api/debug/connection', methods=['GET'])
+def api_debug_connection():
+    """Debug endpoint to check Delta service connection and configuration."""
+    if delta_service is None:
+        return jsonify({
+            'success': False,
+            'error': 'DeltaService not initialized',
+            'services_initialized': False
+        }), 503
+
+    try:
+        # Test connection and query
+        flows = delta_service.list_all_flows()
+
+        return jsonify({
+            'success': True,
+            'services_initialized': True,
+            'connection_info': {
+                'server_hostname': delta_service.server_hostname,
+                'http_path': delta_service.http_path,
+                'table_name': delta_service.table_name,
+                'auth_method': 'OAuth' if delta_service.use_oauth else 'PAT',
+                'connection_open': delta_service._connection is not None and delta_service._connection.open if delta_service._connection else False
+            },
+            'query_result': {
+                'flows_count': len(flows),
+                'sample_flow_names': [f.flow_name for f in flows[:5]]
+            }
+        })
+    except Exception as e:
+        logging.error(f"Debug connection test failed: {e}")
+        import traceback
+        error_traceback = traceback.format_exc()
+        logging.error(error_traceback)
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'error_type': type(e).__name__,
+            'traceback': error_traceback
+        }), 500
 
 
 @flask_app.route('/api/flows/<flow_name>', methods=['GET'])
