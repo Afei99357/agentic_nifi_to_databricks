@@ -25,8 +25,12 @@ try:
     flow_service = FlowService(delta_service)
     notebook_service = NotebookService(databricks_client)
     job_deployment_service = JobDeploymentService(databricks_client)
+    logging.info("All services initialized successfully")
 except Exception as e:
     logging.error(f"Failed to initialize services: {e}")
+    logging.error("Make sure this app is running in a Databricks environment with access to SparkSession")
+    import traceback
+    logging.error(traceback.format_exc())
     databricks_client = None
     delta_service = None
     flow_service = None
@@ -49,6 +53,9 @@ def dashboard():
 @flask_app.route('/api/flows', methods=['GET'])
 def api_list_flows():
     """Get all flows from Delta table."""
+    if delta_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         flows = delta_service.list_all_flows()
         return jsonify({
@@ -62,6 +69,9 @@ def api_list_flows():
 @flask_app.route('/api/flows/<flow_id>', methods=['GET'])
 def api_get_flow(flow_id: str):
     """Get details for a specific flow with latest status."""
+    if flow_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         # Poll latest status from Databricks if converting
         flow_dict = flow_service.poll_flow_status(flow_id)
@@ -80,6 +90,9 @@ def api_get_flow(flow_id: str):
 @flask_app.route('/api/flows/<flow_id>/start', methods=['POST'])
 def api_start_conversion(flow_id: str):
     """Kick off conversion job for a flow."""
+    if flow_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         result = flow_service.start_conversion(flow_id)
 
@@ -94,6 +107,9 @@ def api_start_conversion(flow_id: str):
 @flask_app.route('/api/flows/bulk-start', methods=['POST'])
 def api_bulk_start_conversions():
     """Start conversions for multiple flows."""
+    if flow_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         data = request.json
         flow_ids = data.get('flow_ids', [])
@@ -110,6 +126,9 @@ def api_bulk_start_conversions():
 @flask_app.route('/api/flows/<flow_id>/stop', methods=['POST'])
 def api_stop_conversion(flow_id: str):
     """Cancel a running conversion."""
+    if flow_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         result = flow_service.stop_conversion(flow_id)
 
@@ -124,6 +143,9 @@ def api_stop_conversion(flow_id: str):
 @flask_app.route('/api/flows/<flow_id>/notebooks', methods=['GET'])
 def api_get_notebooks(flow_id: str):
     """Get list of generated notebooks for a flow."""
+    if flow_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         notebooks = flow_service.get_flow_notebooks(flow_id)
 
@@ -138,6 +160,9 @@ def api_get_notebooks(flow_id: str):
 @flask_app.route('/api/flows/<flow_id>/history', methods=['GET'])
 def api_get_flow_history(flow_id: str):
     """Get conversion history for a flow."""
+    if delta_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         limit = request.args.get('limit', default=20, type=int)
         history = delta_service.get_flow_history(flow_id, limit=limit)
@@ -155,6 +180,9 @@ def api_get_flow_history(flow_id: str):
 @flask_app.route('/api/flows/<flow_id>/download', methods=['GET'])
 def api_download_notebooks(flow_id: str):
     """Download generated notebooks as ZIP."""
+    if delta_service is None or notebook_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         flow = delta_service.get_flow(flow_id)
 
@@ -190,6 +218,9 @@ def api_download_notebooks(flow_id: str):
 @flask_app.route('/api/flows/<flow_id>/deploy-and-run', methods=['POST'])
 def api_deploy_and_run(flow_id):
     """Deploy generated notebooks as a Databricks job and run it."""
+    if delta_service is None or notebook_service is None or job_deployment_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         # Get flow from Delta table
         flow = delta_service.get_flow(flow_id)
@@ -246,6 +277,9 @@ def api_deploy_and_run(flow_id):
 @flask_app.route('/api/run/<run_id>/status', methods=['GET'])
 def api_run_status(run_id):
     """Get job run status (for polling)."""
+    if job_deployment_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         status = job_deployment_service.get_job_run_status(run_id)
         return jsonify({
@@ -259,6 +293,9 @@ def api_run_status(run_id):
 @flask_app.route('/api/run/<run_id>/tasks', methods=['GET'])
 def api_run_tasks(run_id):
     """Get task statuses for a job run."""
+    if job_deployment_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         tasks = job_deployment_service.get_task_statuses(run_id)
         return jsonify({
@@ -272,6 +309,9 @@ def api_run_tasks(run_id):
 @flask_app.route('/api/run/<run_id>/task/<task_key>/logs', methods=['GET'])
 def api_task_logs(run_id, task_key):
     """Get logs for a specific task."""
+    if job_deployment_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         logs = job_deployment_service.get_task_logs(run_id, task_key)
         return jsonify({
@@ -285,6 +325,9 @@ def api_task_logs(run_id, task_key):
 @flask_app.route('/api/run/<run_id>/cancel', methods=['POST'])
 def api_cancel_run(run_id):
     """Cancel a running job."""
+    if job_deployment_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
+
     try:
         success = job_deployment_service.cancel_job_run(run_id)
         return jsonify({
