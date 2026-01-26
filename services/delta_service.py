@@ -14,18 +14,42 @@ class DeltaService:
 
     def __init__(self):
         """Initialize with SQL Warehouse connection."""
+        # Get hostname - try DATABRICKS_SERVER_HOSTNAME first, then extract from DATABRICKS_HOST
         self.server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
+        if not self.server_hostname:
+            databricks_host = os.getenv("DATABRICKS_HOST", "")
+            # Extract hostname from URL (remove https:// prefix)
+            self.server_hostname = databricks_host.replace("https://", "").replace("http://", "")
+
         self.http_path = os.getenv("DATABRICKS_HTTP_PATH")
-        self.access_token = os.getenv("DATABRICKS_TOKEN")
         self.table_name = os.getenv("DELTA_TABLE_NAME", "eliao.nifi_to_databricks.nifi_flows")
         self.history_table_name = "eliao.nifi_to_databricks.nifi_conversion_history"
 
+        # Determine authentication method
+        # Prefer OAuth (native for Databricks Apps), fall back to PAT for local dev
+        self.client_id = os.getenv("DATABRICKS_CLIENT_ID")
+        self.client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
+        self.access_token = os.getenv("DATABRICKS_TOKEN")
+
         # Validate configuration
-        if not all([self.server_hostname, self.http_path, self.access_token]):
+        has_oauth = self.client_id and self.client_secret
+        has_pat = self.access_token is not None
+
+        if not self.server_hostname or not self.http_path:
             raise ValueError(
                 "Missing required environment variables: "
-                "DATABRICKS_SERVER_HOSTNAME, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN"
+                "DATABRICKS_HOST (or DATABRICKS_SERVER_HOSTNAME) and DATABRICKS_HTTP_PATH"
             )
+
+        if not has_oauth and not has_pat:
+            raise ValueError(
+                "Missing authentication credentials. Need either: "
+                "(1) DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET (OAuth), or "
+                "(2) DATABRICKS_TOKEN (PAT)"
+            )
+
+        # Store auth method
+        self.use_oauth = has_oauth
 
         # Connection will be created per-query
         self._connection = None
@@ -33,11 +57,21 @@ class DeltaService:
     def _get_connection(self):
         """Get or create SQL connection."""
         if self._connection is None or not self._connection.open:
-            self._connection = sql.connect(
-                server_hostname=self.server_hostname,
-                http_path=self.http_path,
-                access_token=self.access_token
-            )
+            if self.use_oauth:
+                # Use OAuth authentication (Databricks Apps native)
+                self._connection = sql.connect(
+                    server_hostname=self.server_hostname,
+                    http_path=self.http_path,
+                    client_id=self.client_id,
+                    client_secret=self.client_secret
+                )
+            else:
+                # Use PAT authentication (local development)
+                self._connection = sql.connect(
+                    server_hostname=self.server_hostname,
+                    http_path=self.http_path,
+                    access_token=self.access_token
+                )
         return self._connection
 
     def _row_to_dict(self, row, description):

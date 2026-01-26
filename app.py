@@ -29,8 +29,8 @@ try:
 except ValueError as e:
     # Configuration error (missing env vars)
     logging.error(f"Configuration error: {e}")
-    logging.error("Required environment variables: DATABRICKS_SERVER_HOSTNAME, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN")
-    logging.error("Please configure SQL Warehouse connection details in app settings")
+    logging.error("For Databricks Apps: Ensure DATABRICKS_HTTP_PATH is configured in app.yaml")
+    logging.error("For local dev: Set DATABRICKS_TOKEN, DATABRICKS_HOST, and DATABRICKS_HTTP_PATH")
     databricks_client = None
     delta_service = None
     flow_service = None
