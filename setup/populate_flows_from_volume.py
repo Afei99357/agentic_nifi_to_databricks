@@ -52,6 +52,7 @@ print(f"  - Target table: {TABLE_NAME}")
 from databricks.sdk import WorkspaceClient
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
 
 # spark is available in Databricks notebook runtime
 spark  # type: ignore
@@ -225,9 +226,25 @@ def populate_flows_table():
 
     print(f"Successfully parsed {len(flows)} flows")
 
-    # Create DataFrame
+    # Define explicit schema to handle nullable fields
+    schema = StructType([
+        StructField("flow_name", StringType(), False),
+        StructField("server", StringType(), False),
+        StructField("nifi_xml_path", StringType(), False),
+        StructField("description", StringType(), True),  # Nullable
+        StructField("priority", StringType(), True),  # Nullable
+        StructField("owner", StringType(), True),  # Nullable
+        StructField("status", StringType(), False),
+        StructField("progress_percentage", IntegerType(), False),
+        StructField("iterations", IntegerType(), False),
+        StructField("validation_percentage", IntegerType(), False),
+        StructField("total_attempts", IntegerType(), False),
+        StructField("successful_conversions", IntegerType(), False)
+    ])
+
+    # Create DataFrame with explicit schema
     # type: ignore
-    flows_df = spark.createDataFrame(flows)
+    flows_df = spark.createDataFrame(flows, schema=schema)
 
     # Show preview
     print("\nPreview of flows to be inserted:")
