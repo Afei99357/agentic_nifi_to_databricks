@@ -259,8 +259,46 @@ def populate_flows_table():
         MERGE INTO {TABLE_NAME} AS target
         USING new_flows AS source
         ON target.flow_name = source.flow_name
-        WHEN MATCHED THEN UPDATE SET *
-        WHEN NOT MATCHED THEN INSERT *
+        WHEN MATCHED THEN UPDATE SET
+            server = source.server,
+            nifi_xml_path = source.nifi_xml_path,
+            description = source.description,
+            priority = source.priority,
+            owner = source.owner,
+            status = source.status,
+            progress_percentage = source.progress_percentage,
+            iterations = source.iterations,
+            validation_percentage = source.validation_percentage,
+            total_attempts = source.total_attempts,
+            successful_conversions = source.successful_conversions,
+            last_updated = current_timestamp()
+        WHEN NOT MATCHED THEN INSERT (
+            flow_name,
+            server,
+            nifi_xml_path,
+            description,
+            priority,
+            owner,
+            status,
+            progress_percentage,
+            iterations,
+            validation_percentage,
+            total_attempts,
+            successful_conversions
+        ) VALUES (
+            source.flow_name,
+            source.server,
+            source.nifi_xml_path,
+            source.description,
+            source.priority,
+            source.owner,
+            source.status,
+            source.progress_percentage,
+            source.iterations,
+            source.validation_percentage,
+            source.total_attempts,
+            source.successful_conversions
+        )
     """)
 
     print(f"\n✅ Successfully populated {len(flows)} flows into {TABLE_NAME}")
