@@ -44,6 +44,7 @@ print(f"  - History table: {HISTORY_TABLE}")
 # COMMAND ----------
 
 # MAGIC %sql
+# MAGIC -- Create the table first without defaults
 # MAGIC CREATE TABLE IF NOT EXISTS main.default.nifi_flows (
 # MAGIC   -- Primary Key
 # MAGIC   flow_name STRING NOT NULL COMMENT 'Flow name (XML filename without .xml extension)',
@@ -56,16 +57,16 @@ print(f"  - History table: {HISTORY_TABLE}")
 # MAGIC   owner STRING COMMENT 'Team or pod responsible (Pod-A, Pod-B, etc.)',
 # MAGIC
 # MAGIC   -- Conversion Status (Updated by app during conversion)
-# MAGIC   status STRING NOT NULL DEFAULT 'NOT_STARTED' COMMENT 'NOT_STARTED | CONVERTING | DONE | NEEDS_ATTENTION',
+# MAGIC   status STRING NOT NULL COMMENT 'NOT_STARTED | CONVERTING | DONE | NEEDS_ATTENTION',
 # MAGIC   databricks_job_id STRING COMMENT 'Databricks job ID for conversion',
 # MAGIC   databricks_run_id STRING COMMENT 'Current or last run ID',
-# MAGIC   progress_percentage INT DEFAULT 0 COMMENT 'Estimated progress 0-100',
-# MAGIC   iterations INT DEFAULT 0 COMMENT 'Number of agent iterations',
-# MAGIC   validation_percentage INT DEFAULT 0 COMMENT 'Validation coverage 0-100',
+# MAGIC   progress_percentage INT COMMENT 'Estimated progress 0-100',
+# MAGIC   iterations INT COMMENT 'Number of agent iterations',
+# MAGIC   validation_percentage INT COMMENT 'Validation coverage 0-100',
 # MAGIC
 # MAGIC   -- Timestamps
-# MAGIC   created_at TIMESTAMP DEFAULT current_timestamp() COMMENT 'When flow was added to table',
-# MAGIC   last_updated TIMESTAMP DEFAULT current_timestamp() COMMENT 'Last status update',
+# MAGIC   created_at TIMESTAMP COMMENT 'When flow was added to table',
+# MAGIC   last_updated TIMESTAMP COMMENT 'Last status update',
 # MAGIC   conversion_started_at TIMESTAMP COMMENT 'When conversion started',
 # MAGIC   conversion_completed_at TIMESTAMP COMMENT 'When conversion finished',
 # MAGIC
@@ -77,12 +78,50 @@ print(f"  - History table: {HISTORY_TABLE}")
 # MAGIC   PRIMARY KEY (flow_name)
 # MAGIC )
 # MAGIC TBLPROPERTIES (
-# MAGIC   'delta.enableChangeDataFeed' = 'true'
+# MAGIC   'delta.enableChangeDataFeed' = 'true',
+# MAGIC   'delta.feature.allowColumnDefaults' = 'supported'
 # MAGIC );
 
 # COMMAND ----------
 
-print("✅ Step 1: nifi_flows table created")
+# MAGIC %sql
+# MAGIC -- Now add the default values
+# MAGIC ALTER TABLE main.default.nifi_flows
+# MAGIC ALTER COLUMN status SET DEFAULT 'NOT_STARTED';
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE main.default.nifi_flows
+# MAGIC ALTER COLUMN progress_percentage SET DEFAULT 0;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE main.default.nifi_flows
+# MAGIC ALTER COLUMN iterations SET DEFAULT 0;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE main.default.nifi_flows
+# MAGIC ALTER COLUMN validation_percentage SET DEFAULT 0;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE main.default.nifi_flows
+# MAGIC ALTER COLUMN created_at SET DEFAULT current_timestamp();
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE main.default.nifi_flows
+# MAGIC ALTER COLUMN last_updated SET DEFAULT current_timestamp();
+
+# COMMAND ----------
+
+print("✅ Step 1: nifi_flows table created with defaults")
 spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
 
 # COMMAND ----------
@@ -109,14 +148,14 @@ spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
 # MAGIC
 # MAGIC   -- Attempt Status
 # MAGIC   status STRING NOT NULL COMMENT 'CREATING | RUNNING | SUCCESS | FAILED | CANCELLED',
-# MAGIC   started_at TIMESTAMP NOT NULL DEFAULT current_timestamp() COMMENT 'When this attempt started',
+# MAGIC   started_at TIMESTAMP NOT NULL COMMENT 'When this attempt started',
 # MAGIC   completed_at TIMESTAMP COMMENT 'When this attempt finished',
 # MAGIC   duration_seconds INT COMMENT 'Total duration in seconds',
 # MAGIC
 # MAGIC   -- Progress Metrics (updated by agent during conversion)
-# MAGIC   progress_percentage INT DEFAULT 0 COMMENT 'Conversion progress 0-100',
-# MAGIC   iterations INT DEFAULT 0 COMMENT 'Number of agent iterations',
-# MAGIC   validation_percentage INT DEFAULT 0 COMMENT 'Validation coverage 0-100',
+# MAGIC   progress_percentage INT COMMENT 'Conversion progress 0-100',
+# MAGIC   iterations INT COMMENT 'Number of agent iterations',
+# MAGIC   validation_percentage INT COMMENT 'Validation coverage 0-100',
 # MAGIC
 # MAGIC   -- Results
 # MAGIC   generated_notebooks ARRAY<STRING> COMMENT 'List of generated notebook paths',
@@ -131,8 +170,34 @@ spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
 # MAGIC )
 # MAGIC TBLPROPERTIES (
 # MAGIC   'delta.enableChangeDataFeed' = 'true',
+# MAGIC   'delta.feature.allowColumnDefaults' = 'supported',
 # MAGIC   'description' = 'Tracks all NiFi flow conversion attempts for history and auditing'
 # MAGIC );
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC -- Add default values for history table
+# MAGIC ALTER TABLE main.default.nifi_conversion_history
+# MAGIC ALTER COLUMN started_at SET DEFAULT current_timestamp();
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE main.default.nifi_conversion_history
+# MAGIC ALTER COLUMN progress_percentage SET DEFAULT 0;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE main.default.nifi_conversion_history
+# MAGIC ALTER COLUMN iterations SET DEFAULT 0;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE main.default.nifi_conversion_history
+# MAGIC ALTER COLUMN validation_percentage SET DEFAULT 0;
 
 # COMMAND ----------
 
@@ -143,7 +208,7 @@ spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
 
 # COMMAND ----------
 
-print("✅ Step 2: nifi_conversion_history table created")
+print("✅ Step 2: nifi_conversion_history table created with defaults")
 spark.sql(f"DESCRIBE TABLE {HISTORY_TABLE}").show(truncate=False)
 
 # COMMAND ----------
@@ -156,19 +221,32 @@ spark.sql(f"DESCRIBE TABLE {HISTORY_TABLE}").show(truncate=False)
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Add new columns for history tracking
+# MAGIC -- Add new columns for history tracking (without defaults first)
 # MAGIC ALTER TABLE main.default.nifi_flows
 # MAGIC ADD COLUMNS IF NOT EXISTS (
 # MAGIC   current_attempt_id STRING COMMENT 'Reference to current attempt in history table',
-# MAGIC   total_attempts INT DEFAULT 0 COMMENT 'Total number of conversion attempts',
-# MAGIC   successful_conversions INT DEFAULT 0 COMMENT 'Number of successful conversions',
+# MAGIC   total_attempts INT COMMENT 'Total number of conversion attempts',
+# MAGIC   successful_conversions INT COMMENT 'Number of successful conversions',
 # MAGIC   last_attempt_at TIMESTAMP COMMENT 'Timestamp of most recent attempt',
 # MAGIC   first_attempt_at TIMESTAMP COMMENT 'Timestamp of first attempt'
 # MAGIC );
 
 # COMMAND ----------
 
-print("✅ Step 3: History tracking columns added to nifi_flows")
+# MAGIC %sql
+# MAGIC -- Set default values for new columns
+# MAGIC ALTER TABLE main.default.nifi_flows
+# MAGIC ALTER COLUMN total_attempts SET DEFAULT 0;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE main.default.nifi_flows
+# MAGIC ALTER COLUMN successful_conversions SET DEFAULT 0;
+
+# COMMAND ----------
+
+print("✅ Step 3: History tracking columns added to nifi_flows with defaults")
 spark.sql(f"DESCRIBE TABLE {FLOWS_TABLE}").show(truncate=False)
 
 # COMMAND ----------

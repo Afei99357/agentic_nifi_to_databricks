@@ -82,7 +82,12 @@ def extract_flow_info(xml_path):
             'description': description,
             'priority': None,  # Can be set manually later
             'owner': None,     # Can be set manually later
-            'status': 'NOT_STARTED'
+            'status': 'NOT_STARTED',
+            'progress_percentage': 0,
+            'iterations': 0,
+            'validation_percentage': 0,
+            'total_attempts': 0,
+            'successful_conversions': 0
         }
 
     except Exception as e:
