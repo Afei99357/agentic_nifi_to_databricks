@@ -26,8 +26,8 @@ After running this, you can use setup/populate_flows_from_volume.py to load your
 # COMMAND ----------
 
 # Configuration - Change these if your catalog/schema names are different
-CATALOG = "main"
-SCHEMA = "default"
+CATALOG = "eliao"
+SCHEMA = "nifi_to_databricks"
 FLOWS_TABLE = f"{CATALOG}.{SCHEMA}.nifi_flows"
 HISTORY_TABLE = f"{CATALOG}.{SCHEMA}.nifi_conversion_history"
 
