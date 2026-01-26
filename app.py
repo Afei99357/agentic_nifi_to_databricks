@@ -135,6 +135,23 @@ def api_get_notebooks(flow_id: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@flask_app.route('/api/flows/<flow_id>/history', methods=['GET'])
+def api_get_flow_history(flow_id: str):
+    """Get conversion history for a flow."""
+    try:
+        limit = request.args.get('limit', default=20, type=int)
+        history = delta_service.get_flow_history(flow_id, limit=limit)
+
+        return jsonify({
+            'success': True,
+            'flow_id': flow_id,
+            'history': history,
+            'count': len(history)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @flask_app.route('/api/flows/<flow_id>/download', methods=['GET'])
 def api_download_notebooks(flow_id: str):
     """Download generated notebooks as ZIP."""

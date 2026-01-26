@@ -292,6 +292,45 @@
     font-size: 28px;
     font-weight: bold;
 }
+
+.history-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+}
+
+.history-table th,
+.history-table td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.history-table th {
+    background-color: #f8f9fa;
+    font-weight: 600;
+    color: #495057;
+}
+
+.history-table tr:hover {
+    background-color: #f8f9fa;
+}
+
+.history-section {
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 2px solid #e9ecef;
+}
+
+.btn-history {
+    margin-top: 10px;
+    background-color: #6c757d;
+    color: white;
+}
+
+.btn-history:hover {
+    background-color: #545b62;
+}
 </style>
 {% endblock %}
 
@@ -618,6 +657,18 @@ async function showFlowDetails(flowId) {
                             Download Notebooks
                         </button>
                     ` : ''}
+
+                    ${flow.total_attempts && flow.total_attempts > 0 ? `
+                        <h4>Conversion History</h4>
+                        <p><strong>Total Attempts:</strong> ${flow.total_attempts}</p>
+                        <p><strong>Successful:</strong> ${flow.successful_conversions || 0}</p>
+                        ${flow.first_attempt_at ? `<p><strong>First Attempt:</strong> ${formatTimestamp(flow.first_attempt_at)}</p>` : ''}
+                        ${flow.last_attempt_at ? `<p><strong>Last Attempt:</strong> ${formatTimestamp(flow.last_attempt_at)}</p>` : ''}
+                        <button class="btn btn-history" onclick="showFlowHistory('${flow.flow_id}')">
+                            View All Attempts (${flow.total_attempts})
+                        </button>
+                        <div id="historyContainer"></div>
+                    ` : ''}
                 </div>
             `;
         } else {
@@ -634,6 +685,59 @@ function closeFlowDetails() {
 
 function downloadNotebooks(flowId) {
     window.location.href = `/api/flows/${flowId}/download`;
+}
+
+async function showFlowHistory(flowId) {
+    const container = document.getElementById('historyContainer');
+    container.innerHTML = '<p class="loading-message">Loading history...</p>';
+
+    try {
+        const response = await fetch(`/api/flows/${flowId}/history?limit=20`);
+        const data = await response.json();
+
+        if (data.success && data.history.length > 0) {
+            const historyHtml = `
+                <div class="history-section">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>Attempt #</th>
+                                <th>Status</th>
+                                <th>Started</th>
+                                <th>Completed</th>
+                                <th>Duration</th>
+                                <th>Progress</th>
+                                <th>Error</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.history.map(attempt => {
+                                const duration = attempt.duration_seconds
+                                    ? `${Math.floor(attempt.duration_seconds / 60)}m ${attempt.duration_seconds % 60}s`
+                                    : 'N/A';
+                                return `
+                                    <tr>
+                                        <td>#${attempt.attempt_number}</td>
+                                        <td>${getStatusBadge(attempt.status)}</td>
+                                        <td>${formatTimestamp(attempt.started_at)}</td>
+                                        <td>${attempt.completed_at ? formatTimestamp(attempt.completed_at) : 'In Progress'}</td>
+                                        <td>${duration}</td>
+                                        <td>${attempt.progress_percentage || 0}%</td>
+                                        <td>${attempt.error_message ? escapeHtml(attempt.error_message.substring(0, 50)) : '-'}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            container.innerHTML = historyHtml;
+        } else {
+            container.innerHTML = '<p class="info-message">No conversion history available.</p>';
+        }
+    } catch (error) {
+        container.innerHTML = `<p class="error-message">Failed to load history: ${escapeHtml(error.message)}</p>`;
+    }
 }
 
 function filterFlows() {

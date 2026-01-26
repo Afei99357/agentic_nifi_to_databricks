@@ -22,17 +22,24 @@ class NiFiFlowRecord:
 
     # Conversion status
     status: str = 'NOT_STARTED'
-    databricks_job_id: Optional[str] = None
-    databricks_run_id: Optional[str] = None
+    databricks_job_id: Optional[str] = None  # DEPRECATED: Use history table
+    databricks_run_id: Optional[str] = None  # DEPRECATED: Use history table
     progress_percentage: int = 0
     iterations: int = 0
     validation_percentage: int = 0
 
+    # History tracking (NEW)
+    current_attempt_id: Optional[str] = None
+    total_attempts: int = 0
+    successful_conversions: int = 0
+    last_attempt_at: Optional[datetime] = None
+    first_attempt_at: Optional[datetime] = None
+
     # Timestamps
     created_at: Optional[datetime] = None
     last_updated: Optional[datetime] = None
-    conversion_started_at: Optional[datetime] = None
-    conversion_completed_at: Optional[datetime] = None
+    conversion_started_at: Optional[datetime] = None  # DEPRECATED: Use history table
+    conversion_completed_at: Optional[datetime] = None  # DEPRECATED: Use history table
 
     # Results
     generated_notebooks: List[str] = field(default_factory=list)
@@ -56,6 +63,11 @@ class NiFiFlowRecord:
             progress_percentage=row.get('progress_percentage', 0),
             iterations=row.get('iterations', 0),
             validation_percentage=row.get('validation_percentage', 0),
+            current_attempt_id=row.get('current_attempt_id'),
+            total_attempts=row.get('total_attempts', 0),
+            successful_conversions=row.get('successful_conversions', 0),
+            last_attempt_at=row.get('last_attempt_at'),
+            first_attempt_at=row.get('first_attempt_at'),
             created_at=row.get('created_at'),
             last_updated=row.get('last_updated'),
             conversion_started_at=row.get('conversion_started_at'),
@@ -81,6 +93,11 @@ class NiFiFlowRecord:
             'progress_percentage': self.progress_percentage,
             'iterations': self.iterations,
             'validation_percentage': self.validation_percentage,
+            'current_attempt_id': self.current_attempt_id,
+            'total_attempts': self.total_attempts,
+            'successful_conversions': self.successful_conversions,
+            'last_attempt_at': self.last_attempt_at.isoformat() if self.last_attempt_at else None,
+            'first_attempt_at': self.first_attempt_at.isoformat() if self.first_attempt_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'last_updated': self.last_updated.isoformat() if self.last_updated else None,
             'conversion_started_at': self.conversion_started_at.isoformat() if self.conversion_started_at else None,

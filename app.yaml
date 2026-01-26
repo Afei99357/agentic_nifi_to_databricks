@@ -5,7 +5,8 @@ command: [
 ]
 
 env:
-  - name: NIFI_CONVERSION_JOB_ID
-    value: "REPLACE_WITH_ACTUAL_JOB_ID"  # Replace with actual Databricks job ID
+  # Dynamic job creation - no pre-configured job ID needed
   - name: DELTA_TABLE_NAME
     value: "main.default.nifi_flows"
+  - name: AGENT_NOTEBOOK_PATH
+    value: "/Workspace/Shared/nifi_conversion_dummy_agent"  # Path to agent notebook in Workspace
