@@ -169,11 +169,7 @@ spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN iterations SET DEFAULT 0")
 spark.sql(f"ALTER TABLE {HISTORY_TABLE} ALTER COLUMN validation_percentage SET DEFAULT 0")
 
 print("✅ Default values configured")
-
-# Create index on flow_name for faster lookups
-spark.sql(f"CREATE INDEX IF NOT EXISTS idx_history_flow_name ON {HISTORY_TABLE}(flow_name)")
-
-print("✅ Index created on flow_name")
+print("ℹ️  Note: Unity Catalog automatically optimizes queries, no manual indexes needed")
 
 # COMMAND ----------
 

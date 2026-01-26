@@ -41,9 +41,8 @@ TBLPROPERTIES (
   'description' = 'Tracks all NiFi flow conversion attempts for history and auditing'
 );
 
--- Create index on flow_name for faster lookups
-CREATE INDEX IF NOT EXISTS idx_history_flow_name
-ON main.default.nifi_conversion_history(flow_name);
+-- Note: Unity Catalog doesn't support explicit indexes
+-- Delta Lake automatically optimizes queries
 
 -- Verify table was created
 DESCRIBE TABLE main.default.nifi_conversion_history;
