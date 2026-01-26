@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS main.default.nifi_conversion_history (
   attempt_id STRING NOT NULL COMMENT 'Unique identifier for this conversion attempt',
 
   -- Foreign Key
-  flow_id STRING NOT NULL COMMENT 'References nifi_flows.flow_id',
+  flow_name STRING NOT NULL COMMENT 'References nifi_flows.flow_name',
 
   -- Job Information
   databricks_job_id STRING NOT NULL COMMENT 'Databricks job ID created for this attempt',
@@ -41,9 +41,9 @@ TBLPROPERTIES (
   'description' = 'Tracks all NiFi flow conversion attempts for history and auditing'
 );
 
--- Create index on flow_id for faster lookups
-CREATE INDEX IF NOT EXISTS idx_history_flow_id
-ON main.default.nifi_conversion_history(flow_id);
+-- Create index on flow_name for faster lookups
+CREATE INDEX IF NOT EXISTS idx_history_flow_name
+ON main.default.nifi_conversion_history(flow_name);
 
 -- Verify table was created
 DESCRIBE TABLE main.default.nifi_conversion_history;

@@ -7,7 +7,7 @@ to Databricks notebooks. It's used for testing the dynamic job creation and
 history tracking system.
 
 Expected Parameters:
-- flow_id: Flow identifier
+- flow_name: Flow identifier
 - nifi_xml_path: Path to NiFi XML file in UC volume
 - output_path: Where to save generated notebooks
 - attempt_id: Unique attempt identifier for history tracking
@@ -30,19 +30,19 @@ from datetime import datetime
 from pyspark.sql import SparkSession
 
 # Get parameters (passed by Databricks job)
-dbutils.widgets.text("flow_id", "", "Flow ID")
+dbutils.widgets.text("flow_name", "", "Flow ID")
 dbutils.widgets.text("nifi_xml_path", "", "NiFi XML Path")
 dbutils.widgets.text("output_path", "", "Output Path")
 dbutils.widgets.text("attempt_id", "", "Attempt ID")
 dbutils.widgets.text("delta_table", "main.default.nifi_conversion_history", "History Table")
 
-flow_id = dbutils.widgets.get("flow_id")
+flow_name = dbutils.widgets.get("flow_name")
 nifi_xml_path = dbutils.widgets.get("nifi_xml_path")
 output_path = dbutils.widgets.get("output_path")
 attempt_id = dbutils.widgets.get("attempt_id")
 delta_table = dbutils.widgets.get("delta_table")
 
-print(f"Starting conversion for flow: {flow_id}")
+print(f"Starting conversion for flow: {flow_name}")
 print(f"XML Path: {nifi_xml_path}")
 print(f"Output Path: {output_path}")
 print(f"Attempt ID: {attempt_id}")
@@ -56,8 +56,8 @@ print(f"History Table: {delta_table}")
 # COMMAND ----------
 
 # Validate required parameters
-if not all([flow_id, nifi_xml_path, output_path, attempt_id]):
-    raise ValueError("Missing required parameters. All of flow_id, nifi_xml_path, output_path, and attempt_id are required.")
+if not all([flow_name, nifi_xml_path, output_path, attempt_id]):
+    raise ValueError("Missing required parameters. All of flow_name, nifi_xml_path, output_path, and attempt_id are required.")
 
 # Validate XML file exists (if path is in volume format)
 # For now, just log the path - real agent would read and parse the XML
@@ -193,4 +193,4 @@ for nb in generated_notebooks:
     print(f"  - {nb}")
 
 # Return success
-dbutils.notebook.exit(f"SUCCESS: Generated {len(generated_notebooks)} notebooks for {flow_id}")
+dbutils.notebook.exit(f"SUCCESS: Generated {len(generated_notebooks)} notebooks for {flow_name}")

@@ -66,15 +66,15 @@ def api_list_flows():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_id>', methods=['GET'])
-def api_get_flow(flow_id: str):
+@flask_app.route('/api/flows/<flow_name>', methods=['GET'])
+def api_get_flow(flow_name: str):
     """Get details for a specific flow with latest status."""
     if flow_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
         # Poll latest status from Databricks if converting
-        flow_dict = flow_service.poll_flow_status(flow_id)
+        flow_dict = flow_service.poll_flow_status(flow_name)
 
         if not flow_dict:
             return jsonify({'success': False, 'error': 'Flow not found'}), 404
@@ -87,14 +87,14 @@ def api_get_flow(flow_id: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_id>/start', methods=['POST'])
-def api_start_conversion(flow_id: str):
+@flask_app.route('/api/flows/<flow_name>/start', methods=['POST'])
+def api_start_conversion(flow_name: str):
     """Kick off conversion job for a flow."""
     if flow_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
-        result = flow_service.start_conversion(flow_id)
+        result = flow_service.start_conversion(flow_name)
 
         if not result['success']:
             return jsonify(result), 400
@@ -112,25 +112,25 @@ def api_bulk_start_conversions():
 
     try:
         data = request.json
-        flow_ids = data.get('flow_ids', [])
+        flow_names = data.get('flow_names', [])
 
-        if not flow_ids:
-            return jsonify({'success': False, 'error': 'flow_ids required'}), 400
+        if not flow_names:
+            return jsonify({'success': False, 'error': 'flow_names required'}), 400
 
-        result = flow_service.start_bulk_conversions(flow_ids)
+        result = flow_service.start_bulk_conversions(flow_names)
         return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_id>/stop', methods=['POST'])
-def api_stop_conversion(flow_id: str):
+@flask_app.route('/api/flows/<flow_name>/stop', methods=['POST'])
+def api_stop_conversion(flow_name: str):
     """Cancel a running conversion."""
     if flow_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
-        result = flow_service.stop_conversion(flow_id)
+        result = flow_service.stop_conversion(flow_name)
 
         if not result['success']:
             return jsonify(result), 400
@@ -140,14 +140,14 @@ def api_stop_conversion(flow_id: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_id>/notebooks', methods=['GET'])
-def api_get_notebooks(flow_id: str):
+@flask_app.route('/api/flows/<flow_name>/notebooks', methods=['GET'])
+def api_get_notebooks(flow_name: str):
     """Get list of generated notebooks for a flow."""
     if flow_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
-        notebooks = flow_service.get_flow_notebooks(flow_id)
+        notebooks = flow_service.get_flow_notebooks(flow_name)
 
         return jsonify({
             'success': True,
@@ -157,19 +157,19 @@ def api_get_notebooks(flow_id: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_id>/history', methods=['GET'])
-def api_get_flow_history(flow_id: str):
+@flask_app.route('/api/flows/<flow_name>/history', methods=['GET'])
+def api_get_flow_history(flow_name: str):
     """Get conversion history for a flow."""
     if delta_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
         limit = request.args.get('limit', default=20, type=int)
-        history = delta_service.get_flow_history(flow_id, limit=limit)
+        history = delta_service.get_flow_history(flow_name, limit=limit)
 
         return jsonify({
             'success': True,
-            'flow_id': flow_id,
+            'flow_name': flow_name,
             'history': history,
             'count': len(history)
         })
@@ -177,14 +177,14 @@ def api_get_flow_history(flow_id: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_id>/download', methods=['GET'])
-def api_download_notebooks(flow_id: str):
+@flask_app.route('/api/flows/<flow_name>/download', methods=['GET'])
+def api_download_notebooks(flow_name: str):
     """Download generated notebooks as ZIP."""
     if delta_service is None or notebook_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
-        flow = delta_service.get_flow(flow_id)
+        flow = delta_service.get_flow(flow_name)
 
         if not flow or not flow.generated_notebooks:
             return jsonify({'success': False, 'error': 'No notebooks found'}), 404
@@ -197,7 +197,7 @@ def api_download_notebooks(flow_id: str):
             nb = Notebook(
                 notebook_id=notebook_name,
                 notebook_name=notebook_name,
-                flow_id=flow.flow_id,
+                flow_name=flow.flow_name,
                 content=f"# Notebook: {notebook_name}\n# Flow: {flow.flow_name}\n",
                 language="python",
                 volume_path=notebook_path
@@ -215,15 +215,15 @@ def api_download_notebooks(flow_id: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_id>/deploy-and-run', methods=['POST'])
-def api_deploy_and_run(flow_id):
+@flask_app.route('/api/flows/<flow_name>/deploy-and-run', methods=['POST'])
+def api_deploy_and_run(flow_name):
     """Deploy generated notebooks as a Databricks job and run it."""
     if delta_service is None or notebook_service is None or job_deployment_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
         # Get flow from Delta table
-        flow = delta_service.get_flow(flow_id)
+        flow = delta_service.get_flow(flow_name)
         if not flow:
             return jsonify({'success': False, 'error': 'Flow not found'}), 404
 
@@ -237,14 +237,14 @@ def api_deploy_and_run(flow_id):
         # Create notebook objects with volume paths
         from models.nifi_flow import Notebook
         notebooks = []
-        output_path = f"/Volumes/main/default/nifi_notebooks/{flow.flow_id}"
+        output_path = f"/Volumes/main/default/nifi_notebooks/{flow.flow_name}"
 
         for notebook_path in flow.generated_notebooks:
             notebook_name = os.path.basename(notebook_path)
             nb = Notebook(
                 notebook_id=notebook_name,
                 notebook_name=notebook_name,
-                flow_id=flow.flow_id,
+                flow_name=flow.flow_name,
                 content=f"# Notebook: {notebook_name}\n",
                 language="python",
                 volume_path=notebook_path

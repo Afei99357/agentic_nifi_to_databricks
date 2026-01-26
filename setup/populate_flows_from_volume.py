@@ -51,15 +51,9 @@ def scan_volume_for_xmls(volume_path):
 def extract_flow_info(xml_path):
     """Extract flow information from NiFi XML file."""
     try:
-        # Read XML content
-        content = w.files.download(xml_path).contents.read().decode('utf-8')
-        root = ET.fromstring(content)
-
-        # Extract flow name (from root processGroup name attribute or filename)
-        flow_name = root.get('name')
-        if not flow_name:
-            # Fall back to filename without extension
-            flow_name = xml_path.split('/')[-1].replace('.xml', '')
+        # Extract flow_name from filename (without .xml extension)
+        filename = xml_path.split('/')[-1]
+        flow_name = filename.replace('.xml', '')
 
         # Extract server/environment from path (e.g., "prod", "thailand")
         path_parts = xml_path.split('/')
@@ -69,18 +63,19 @@ def extract_flow_info(xml_path):
                 server = path_parts[i + 1]
                 break
 
-        # Try to extract description from comment or position tag
+        # Optionally try to extract description from XML
         description = None
-        for child in root:
-            if child.tag == 'comment' or child.tag == 'description':
-                description = child.text
-                break
-
-        # Generate flow_id from path (sanitized)
-        flow_id = re.sub(r'[^a-z0-9_]', '_', xml_path.lower().replace('.xml', '').split('/')[-1])
+        try:
+            content = w.files.download(xml_path).contents.read().decode('utf-8')
+            root = ET.fromstring(content)
+            for child in root:
+                if child.tag == 'comment' or child.tag == 'description':
+                    description = child.text
+                    break
+        except Exception as e:
+            print(f"  Warning: Could not parse XML for description: {e}")
 
         return {
-            'flow_id': flow_id,
             'flow_name': flow_name,
             'server': server,
             'nifi_xml_path': xml_path,
@@ -91,7 +86,7 @@ def extract_flow_info(xml_path):
         }
 
     except Exception as e:
-        print(f"Error parsing {xml_path}: {e}")
+        print(f"Error processing {xml_path}: {e}")
         return None
 
 def populate_flows_table():
@@ -119,16 +114,16 @@ def populate_flows_table():
 
     # Show preview
     print("\nPreview of flows to be inserted:")
-    flows_df.select('flow_id', 'flow_name', 'server', 'nifi_xml_path').show(5, truncate=False)
+    flows_df.select('flow_name', 'server', 'nifi_xml_path').show(5, truncate=False)
 
     # Insert into Delta table (append mode to avoid duplicates if run multiple times)
-    # Use merge to handle duplicates based on flow_id
+    # Use merge to handle duplicates based on flow_name
     flows_df.createOrReplaceTempView("new_flows")
 
     spark.sql(f"""
         MERGE INTO {TABLE_NAME} AS target
         USING new_flows AS source
-        ON target.flow_id = source.flow_id
+        ON target.flow_name = source.flow_name
         WHEN MATCHED THEN UPDATE SET *
         WHEN NOT MATCHED THEN INSERT *
     """)

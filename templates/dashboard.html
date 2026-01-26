@@ -432,10 +432,10 @@ function renderFlowTable() {
         const canStart = flow.status === 'NOT_STARTED' || flow.status === 'NEEDS_ATTENTION';
 
         html += `
-            <tr class="flow-row ${isConverting ? 'converting' : ''}" data-flow-id="${flow.flow_id}">
-                <td><input type="checkbox" class="flow-checkbox" value="${flow.flow_id}"
+            <tr class="flow-row ${isConverting ? 'converting' : ''}" data-flow-id="${flow.flow_name}">
+                <td><input type="checkbox" class="flow-checkbox" value="${flow.flow_name}"
                     ${canStart ? '' : 'disabled'} onchange="updateBulkButton()"></td>
-                <td><a href="#" onclick="showFlowDetails('${flow.flow_id}'); return false;">${escapeHtml(flow.flow_name)}</a></td>
+                <td><a href="#" onclick="showFlowDetails('${flow.flow_name}'); return false;">${escapeHtml(flow.flow_name)}</a></td>
                 <td>${escapeHtml(flow.server || 'N/A')}</td>
                 <td>${escapeHtml(flow.owner || 'N/A')}</td>
                 <td>${statusBadge}</td>
@@ -445,10 +445,10 @@ function renderFlowTable() {
                 <td>${formatTimestamp(flow.last_updated)}</td>
                 <td>
                     ${canStart ?
-                        `<button class="btn btn-sm btn-primary" onclick="startFlow('${flow.flow_id}')">Start</button>` :
+                        `<button class="btn btn-sm btn-primary" onclick="startFlow('${flow.flow_name}')">Start</button>` :
                         isConverting ?
-                        `<button class="btn btn-sm btn-secondary" onclick="stopFlow('${flow.flow_id}')">Stop</button>` :
-                        `<button class="btn btn-sm btn-secondary" onclick="showFlowDetails('${flow.flow_id}')">View</button>`
+                        `<button class="btn btn-sm btn-secondary" onclick="stopFlow('${flow.flow_name}')">Stop</button>` :
+                        `<button class="btn btn-sm btn-secondary" onclick="showFlowDetails('${flow.flow_name}')">View</button>`
                     }
                 </td>
             </tr>
@@ -572,7 +572,7 @@ async function startSelectedFlows() {
         const response = await fetch('/api/flows/bulk-start', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({flow_ids: flowIds})
+            body: JSON.stringify({flow_names: flowIds})
         });
 
         const data = await response.json();
@@ -623,7 +623,7 @@ async function showFlowDetails(flowId) {
             content.innerHTML = `
                 <div class="flow-details">
                     <h4>Flow Information</h4>
-                    <p><strong>Flow ID:</strong> ${escapeHtml(flow.flow_id)}</p>
+                    <p><strong>Flow ID:</strong> ${escapeHtml(flow.flow_name)}</p>
                     <p><strong>Server:</strong> ${escapeHtml(flow.server)}</p>
                     <p><strong>Priority:</strong> ${escapeHtml(flow.priority || 'N/A')}</p>
                     <p><strong>Owner:</strong> ${escapeHtml(flow.owner || 'N/A')}</p>
@@ -653,7 +653,7 @@ async function showFlowDetails(flowId) {
                         <ul>
                             ${flow.generated_notebooks.map(nb => `<li>${escapeHtml(nb)}</li>`).join('')}
                         </ul>
-                        <button class="btn btn-primary" onclick="downloadNotebooks('${flow.flow_id}')">
+                        <button class="btn btn-primary" onclick="downloadNotebooks('${flow.flow_name}')">
                             Download Notebooks
                         </button>
                     ` : ''}
@@ -664,7 +664,7 @@ async function showFlowDetails(flowId) {
                         <p><strong>Successful:</strong> ${flow.successful_conversions || 0}</p>
                         ${flow.first_attempt_at ? `<p><strong>First Attempt:</strong> ${formatTimestamp(flow.first_attempt_at)}</p>` : ''}
                         ${flow.last_attempt_at ? `<p><strong>Last Attempt:</strong> ${formatTimestamp(flow.last_attempt_at)}</p>` : ''}
-                        <button class="btn btn-history" onclick="showFlowHistory('${flow.flow_id}')">
+                        <button class="btn btn-history" onclick="showFlowHistory('${flow.flow_name}')">
                             View All Attempts (${flow.total_attempts})
                         </button>
                         <div id="historyContainer"></div>

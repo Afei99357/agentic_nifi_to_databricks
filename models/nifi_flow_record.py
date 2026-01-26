@@ -10,8 +10,7 @@ from datetime import datetime
 @dataclass
 class NiFiFlowRecord:
     """Represents a row from nifi_flows Delta table."""
-    flow_id: str
-    flow_name: str
+    flow_name: str  # PRIMARY KEY - XML filename without .xml extension
     server: str
 
     # Optional metadata
@@ -50,7 +49,6 @@ class NiFiFlowRecord:
     def from_row(row):
         """Create from Spark Row."""
         return NiFiFlowRecord(
-            flow_id=row['flow_id'],
             flow_name=row['flow_name'],
             server=row['server'],
             nifi_xml_path=row.get('nifi_xml_path'),
@@ -80,7 +78,6 @@ class NiFiFlowRecord:
     def to_dict(self):
         """Convert to dictionary for JSON response."""
         return {
-            'flow_id': self.flow_id,
             'flow_name': self.flow_name,
             'server': self.server,
             'nifi_xml_path': self.nifi_xml_path,

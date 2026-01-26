@@ -27,25 +27,25 @@ class FlowService:
         self.dynamic_job_service = DynamicJobService()
         self.logger = logging.getLogger(__name__)
 
-    def start_conversion(self, flow_id: str) -> dict:
+    def start_conversion(self, flow_name: str) -> dict:
         """
         Kick off conversion for a flow by creating a new Databricks job.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow identifier
 
         Returns:
             dict with keys: success (bool), job_id (str), run_id (str),
-                           attempt_id (str), flow_id (str), error (str)
+                           attempt_id (str), flow_name (str), error (str)
         """
         # Get flow details
-        flow = self.delta_service.get_flow(flow_id)
+        flow = self.delta_service.get_flow(flow_name)
         if not flow:
             return {'success': False, 'error': 'Flow not found'}
 
         # Check if already converting
         if flow.status == 'CONVERTING':
-            current_attempt = self.delta_service.get_current_attempt(flow_id)
+            current_attempt = self.delta_service.get_current_attempt(flow_name)
             return {
                 'success': False,
                 'error': 'Conversion already in progress',
@@ -60,17 +60,16 @@ class FlowService:
             # Create attempt record first (to get attempt_id)
             # Use placeholder job_id until we create the actual job
             attempt_id = self.delta_service.create_conversion_attempt(
-                flow_id,
+                flow_name,
                 "PENDING",
                 f"NiFi_Conversion_{flow.flow_name}"
             )
 
             # Create and run the Databricks job
             job_info = self.dynamic_job_service.create_and_run_job(
-                flow_id=flow_id,
+                flow_name=flow_name,
                 nifi_xml_path=flow.nifi_xml_path,
-                attempt_id=attempt_id,
-                flow_name=flow.flow_name
+                attempt_id=attempt_id
             )
 
             # Update attempt with actual job_id and run_id
@@ -81,18 +80,18 @@ class FlowService:
                 'status': 'RUNNING'
             })
 
-            self.logger.info(f"Started conversion for {flow_id}: job {job_info['job_id']}, run {job_info['run_id']}")
+            self.logger.info(f"Started conversion for {flow_name}: job {job_info['job_id']}, run {job_info['run_id']}")
 
             return {
                 'success': True,
                 'job_id': job_info['job_id'],
                 'run_id': job_info['run_id'],
                 'attempt_id': attempt_id,
-                'flow_id': flow_id
+                'flow_name': flow_name
             }
 
         except Exception as e:
-            self.logger.error(f"Failed to start conversion for {flow_id}: {e}")
+            self.logger.error(f"Failed to start conversion for {flow_name}: {e}")
 
             # Mark attempt as failed if it was created
             if 'attempt_id' in locals():
@@ -103,26 +102,26 @@ class FlowService:
                 })
 
             # Update flow status
-            self.delta_service.update_flow_status(flow_id, {
+            self.delta_service.update_flow_status(flow_name, {
                 'status': 'NEEDS_ATTENTION',
                 'error_message': str(e)
             })
 
             return {'success': False, 'error': str(e), 'attempt_id': attempt_id if 'attempt_id' in locals() else None}
 
-    def start_bulk_conversions(self, flow_ids: List[str]) -> dict:
+    def start_bulk_conversions(self, flow_names: List[str]) -> dict:
         """
         Start conversions for multiple flows.
 
         Args:
-            flow_ids: List of flow identifiers
+            flow_names: List of flow identifiers
 
         Returns:
             dict with results for each flow
         """
         results = []
-        for flow_id in flow_ids:
-            result = self.start_conversion(flow_id)
+        for flow_name in flow_names:
+            result = self.start_conversion(flow_name)
             results.append(result)
 
         return {
@@ -132,22 +131,22 @@ class FlowService:
             'failed': len([r for r in results if not r['success']])
         }
 
-    def poll_flow_status(self, flow_id: str) -> dict:
+    def poll_flow_status(self, flow_name: str) -> dict:
         """
         Poll Databricks for current status and update history table.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow identifier
 
         Returns:
             Updated flow as dictionary
         """
-        flow = self.delta_service.get_flow(flow_id)
+        flow = self.delta_service.get_flow(flow_name)
         if not flow:
             return {}
 
         # Get current attempt
-        current_attempt = self.delta_service.get_current_attempt(flow_id)
+        current_attempt = self.delta_service.get_current_attempt(flow_name)
         if not current_attempt or not current_attempt.get('databricks_run_id'):
             return flow.to_dict()
 
@@ -181,7 +180,7 @@ class FlowService:
                     updates['status_message'] = 'Conversion completed'
 
                     # Update flow status
-                    self.delta_service.update_flow_status(flow_id, {
+                    self.delta_service.update_flow_status(flow_name, {
                         'status': 'DONE',
                         'successful_conversions': (flow.successful_conversions or 0) + 1
                     })
@@ -192,7 +191,7 @@ class FlowService:
                     updates['completed_at'] = datetime.now().isoformat()
 
                     # Update flow status
-                    self.delta_service.update_flow_status(flow_id, {
+                    self.delta_service.update_flow_status(flow_name, {
                         'status': 'NEEDS_ATTENTION'
                     })
 
@@ -202,7 +201,7 @@ class FlowService:
                     updates['completed_at'] = datetime.now().isoformat()
 
                     # Update flow status
-                    self.delta_service.update_flow_status(flow_id, {
+                    self.delta_service.update_flow_status(flow_name, {
                         'status': 'NEEDS_ATTENTION'
                     })
 
@@ -211,33 +210,33 @@ class FlowService:
                 self.delta_service.update_attempt_status(current_attempt['attempt_id'], updates)
 
             # Return updated flow
-            return self.delta_service.get_flow(flow_id).to_dict()
+            return self.delta_service.get_flow(flow_name).to_dict()
 
         except Exception as e:
-            self.logger.error(f"Failed to poll status for {flow_id}: {e}")
+            self.logger.error(f"Failed to poll status for {flow_name}: {e}")
             self.delta_service.update_attempt_status(current_attempt['attempt_id'], {
                 'status': 'FAILED',
                 'error_message': f'Polling failed: {str(e)}',
                 'completed_at': datetime.now().isoformat()
             })
-            self.delta_service.update_flow_status(flow_id, {
+            self.delta_service.update_flow_status(flow_name, {
                 'status': 'NEEDS_ATTENTION',
                 'error_message': f'Polling failed: {str(e)}'
             })
             return flow.to_dict()
 
-    def stop_conversion(self, flow_id: str) -> dict:
+    def stop_conversion(self, flow_name: str) -> dict:
         """
         Cancel a running conversion.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow identifier
 
         Returns:
             dict with success status
         """
         # Get current attempt
-        current_attempt = self.delta_service.get_current_attempt(flow_id)
+        current_attempt = self.delta_service.get_current_attempt(flow_name)
         if not current_attempt or not current_attempt.get('databricks_run_id'):
             return {'success': False, 'error': 'No running job found'}
 
@@ -253,27 +252,27 @@ class FlowService:
             })
 
             # Update flow status
-            self.delta_service.update_flow_status(flow_id, {
+            self.delta_service.update_flow_status(flow_name, {
                 'status': 'NEEDS_ATTENTION',
                 'status_message': 'Cancelled by user'
             })
 
             return {'success': True}
         except Exception as e:
-            self.logger.error(f"Failed to cancel conversion for {flow_id}: {e}")
+            self.logger.error(f"Failed to cancel conversion for {flow_name}: {e}")
             return {'success': False, 'error': str(e)}
 
-    def get_flow_notebooks(self, flow_id: str) -> List[str]:
+    def get_flow_notebooks(self, flow_name: str) -> List[str]:
         """
         Get list of generated notebooks for a flow.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow identifier
 
         Returns:
             List of notebook paths
         """
-        flow = self.delta_service.get_flow(flow_id)
+        flow = self.delta_service.get_flow(flow_name)
         if not flow:
             return []
 

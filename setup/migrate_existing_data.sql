@@ -6,7 +6,7 @@
 -- For flows that have already been converted (have databricks_run_id)
 INSERT INTO main.default.nifi_conversion_history (
   attempt_id,
-  flow_id,
+  flow_name,
   databricks_job_id,
   databricks_run_id,
   job_name,
@@ -24,8 +24,8 @@ INSERT INTO main.default.nifi_conversion_history (
   triggered_by
 )
 SELECT
-  CONCAT(flow_id, '_attempt_migrated') AS attempt_id,
-  flow_id,
+  CONCAT(flow_name, '_attempt_migrated') AS attempt_id,
+  flow_name,
   COALESCE(databricks_job_id, 'MIGRATED_UNKNOWN') AS databricks_job_id,
   databricks_run_id,
   CONCAT('NiFi_Conversion_', flow_name, '_migrated') AS job_name,
@@ -56,7 +56,7 @@ WHERE databricks_run_id IS NOT NULL;  -- Only migrate flows that have been conve
 -- Step 2: Update flows table with references to migrated history
 UPDATE main.default.nifi_flows
 SET
-  current_attempt_id = CONCAT(flow_id, '_attempt_migrated'),
+  current_attempt_id = CONCAT(flow_name, '_attempt_migrated'),
   total_attempts = 1,
   successful_conversions = CASE WHEN status = 'DONE' THEN 1 ELSE 0 END,
   first_attempt_at = COALESCE(conversion_started_at, created_at),
@@ -71,7 +71,6 @@ FROM main.default.nifi_conversion_history;
 
 -- Step 4: Show summary of migrated data
 SELECT
-  f.flow_id,
   f.flow_name,
   f.total_attempts,
   f.successful_conversions,

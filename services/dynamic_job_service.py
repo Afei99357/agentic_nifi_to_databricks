@@ -34,42 +34,39 @@ class DynamicJobService:
 
     def create_conversion_job(
         self,
-        flow_id: str,
+        flow_name: str,
         nifi_xml_path: str,
-        attempt_id: str,
-        flow_name: Optional[str] = None
+        attempt_id: str
     ) -> dict:
         """
         Create a new Databricks job for converting a NiFi flow.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow name (XML filename without .xml)
             nifi_xml_path: Path to NiFi XML file in Unity Catalog volume
             attempt_id: Unique attempt identifier for history tracking
-            flow_name: Optional flow name for job naming
 
         Returns:
-            dict with job_id, job_name, flow_id, attempt_id
+            dict with job_id, job_name, flow_name, attempt_id
 
         Raises:
             Exception: If job creation fails
         """
         timestamp = int(datetime.now().timestamp())
-        display_name = flow_name or flow_id
-        job_name = f"NiFi_Conversion_{display_name}_{timestamp}"
+        job_name = f"NiFi_Conversion_{flow_name}_{timestamp}"
 
         # Prepare job configuration
         job_config = {
             "name": job_name,
             "tasks": [
                 {
-                    "task_key": f"convert_{flow_id}",
+                    "task_key": f"convert_{flow_name}",
                     "notebook_task": {
                         "notebook_path": self.agent_notebook_path,
                         "base_parameters": {
-                            "flow_id": flow_id,
+                            "flow_name": flow_name,
                             "nifi_xml_path": nifi_xml_path,
-                            "output_path": f"/Volumes/main/default/nifi_notebooks/{flow_id}",
+                            "output_path": f"/Volumes/main/default/nifi_notebooks/{flow_name}",
                             "attempt_id": attempt_id,
                             "delta_table": "main.default.nifi_conversion_history"
                         }
@@ -89,7 +86,7 @@ class DynamicJobService:
             "max_concurrent_runs": 1,
             "timeout_seconds": 7200,
             "tags": {
-                "flow_id": flow_id,
+                "flow_name": flow_name,
                 "attempt_id": attempt_id,
                 "purpose": "nifi_conversion",
                 "created_by": "nifi_accelerator_app"
@@ -98,16 +95,16 @@ class DynamicJobService:
 
         try:
             job = self.client.jobs.create(**job_config)
-            self.logger.info(f"Created job {job.job_id} for flow {flow_id} (attempt {attempt_id})")
+            self.logger.info(f"Created job {job.job_id} for flow {flow_name} (attempt {attempt_id})")
 
             return {
                 "job_id": str(job.job_id),
                 "job_name": job_name,
-                "flow_id": flow_id,
+                "flow_name": flow_name,
                 "attempt_id": attempt_id
             }
         except Exception as e:
-            self.logger.error(f"Failed to create job for flow {flow_id}: {e}")
+            self.logger.error(f"Failed to create job for flow {flow_name}: {e}")
             raise Exception(f"Job creation failed: {str(e)}")
 
     def run_job(self, job_id: str) -> str:
@@ -134,32 +131,29 @@ class DynamicJobService:
 
     def create_and_run_job(
         self,
-        flow_id: str,
+        flow_name: str,
         nifi_xml_path: str,
-        attempt_id: str,
-        flow_name: Optional[str] = None
+        attempt_id: str
     ) -> dict:
         """
         Create and immediately run a conversion job.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow name (XML filename without .xml)
             nifi_xml_path: Path to NiFi XML file
             attempt_id: Unique attempt identifier
-            flow_name: Optional flow name for job naming
 
         Returns:
-            dict with job_id, run_id, attempt_id, flow_id
+            dict with job_id, run_id, attempt_id, flow_name
 
         Raises:
             Exception: If creation or execution fails
         """
         # Create the job
         job_info = self.create_conversion_job(
-            flow_id=flow_id,
+            flow_name=flow_name,
             nifi_xml_path=nifi_xml_path,
-            attempt_id=attempt_id,
-            flow_name=flow_name
+            attempt_id=attempt_id
         )
 
         # Run the job
@@ -169,7 +163,7 @@ class DynamicJobService:
             "job_id": job_info['job_id'],
             "run_id": run_id,
             "attempt_id": attempt_id,
-            "flow_id": flow_id,
+            "flow_name": flow_name,
             "job_name": job_info['job_name']
         }
 
@@ -212,12 +206,12 @@ class DynamicJobService:
             self.logger.error(f"Failed to get job info for {job_id}: {e}")
             return {}
 
-    def cleanup_old_jobs(self, flow_id: str, keep_latest: int = 3):
+    def cleanup_old_jobs(self, flow_name: str, keep_latest: int = 3):
         """
         Clean up old conversion jobs for a flow, keeping only the N most recent.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow identifier
             keep_latest: Number of recent jobs to keep (default: 3)
 
         Note:
@@ -225,12 +219,12 @@ class DynamicJobService:
             Jobs can be manually deleted from Databricks UI if needed.
         """
         try:
-            # List all jobs with the flow_id tag
+            # List all jobs with the flow_name tag
             jobs = self.client.jobs.list()
             flow_jobs = [
                 job for job in jobs
                 if job.settings and job.settings.tags
-                and job.settings.tags.get("flow_id") == flow_id
+                and job.settings.tags.get("flow_name") == flow_name
             ]
 
             # Sort by creation time (newest first)
@@ -238,8 +232,8 @@ class DynamicJobService:
 
             # Delete old jobs
             for job in flow_jobs[keep_latest:]:
-                self.logger.info(f"Cleaning up old job {job.job_id} for flow {flow_id}")
+                self.logger.info(f"Cleaning up old job {job.job_id} for flow {flow_name}")
                 self.delete_job(str(job.job_id))
 
         except Exception as e:
-            self.logger.warning(f"Failed to cleanup old jobs for flow {flow_id}: {e}")
+            self.logger.warning(f"Failed to cleanup old jobs for flow {flow_name}: {e}")

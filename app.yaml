@@ -9,4 +9,4 @@ env:
   - name: DELTA_TABLE_NAME
     value: "main.default.nifi_flows"
   - name: AGENT_NOTEBOOK_PATH
-    value: "/Workspace/Shared/nifi_conversion_dummy_agent"  # Path to agent notebook in Workspace
+    value: "/Workspace/Shared/nifi_conversion_dummy_agent"  # IMPORTANT: Upload notebooks/nifi_conversion_dummy_agent.py to this path in Databricks Workspace

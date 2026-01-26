@@ -34,21 +34,21 @@ class DeltaService:
         except Exception as e:
             raise Exception(f"Failed to read flows from Delta table: {str(e)}")
 
-    def get_flow(self, flow_id: str) -> Optional[NiFiFlowRecord]:
+    def get_flow(self, flow_name: str) -> Optional[NiFiFlowRecord]:
         """Get a single flow by ID."""
         try:
             df = self.spark.read.table(self.table_name)
-            rows = df.filter(df.flow_id == flow_id).collect()
+            rows = df.filter(df.flow_name == flow_name).collect()
             return NiFiFlowRecord.from_row(rows[0]) if rows else None
         except Exception as e:
-            raise Exception(f"Failed to get flow {flow_id}: {str(e)}")
+            raise Exception(f"Failed to get flow {flow_name}: {str(e)}")
 
-    def update_flow_status(self, flow_id: str, updates: dict):
+    def update_flow_status(self, flow_name: str, updates: dict):
         """
         Update flow fields (status, run_id, progress, etc.).
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow identifier
             updates: Dictionary of fields to update
         """
         try:
@@ -77,21 +77,21 @@ class DeltaService:
             sql = f"""
                 UPDATE {self.table_name}
                 SET {set_clause}, last_updated = current_timestamp()
-                WHERE flow_id = '{flow_id}'
+                WHERE flow_name = '{flow_name}'
             """
             self.spark.sql(sql)
 
         except Exception as e:
-            raise Exception(f"Failed to update flow {flow_id}: {str(e)}")
+            raise Exception(f"Failed to update flow {flow_name}: {str(e)}")
 
-    def bulk_update_status(self, flow_ids: List[str], status: str):
+    def bulk_update_status(self, flow_names: List[str], status: str):
         """Update status for multiple flows."""
         try:
-            ids_str = "', '".join(flow_ids)
+            ids_str = "', '".join(flow_names)
             sql = f"""
                 UPDATE {self.table_name}
                 SET status = '{status}', last_updated = current_timestamp()
-                WHERE flow_id IN ('{ids_str}')
+                WHERE flow_name IN ('{ids_str}')
             """
             self.spark.sql(sql)
         except Exception as e:
@@ -128,7 +128,7 @@ class DeltaService:
 
     def create_conversion_attempt(
         self,
-        flow_id: str,
+        flow_name: str,
         job_id: str,
         job_name: str
     ) -> str:
@@ -136,7 +136,7 @@ class DeltaService:
         Create a new conversion attempt record in history table.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow identifier
             job_id: Databricks job ID (can be "PENDING" initially)
             job_name: Name of the Databricks job
 
@@ -146,23 +146,23 @@ class DeltaService:
         from datetime import datetime
 
         timestamp = int(datetime.now().timestamp())
-        attempt_id = f"{flow_id}_attempt_{timestamp}"
+        attempt_id = f"{flow_name}_attempt_{timestamp}"
 
         # Get current attempt count
-        flow = self.get_flow(flow_id)
+        flow = self.get_flow(flow_name)
         if not flow:
-            raise Exception(f"Flow {flow_id} not found")
+            raise Exception(f"Flow {flow_name} not found")
 
         attempt_number = (flow.total_attempts or 0) + 1
 
         # Insert into history table
         self.spark.sql(f"""
             INSERT INTO main.default.nifi_conversion_history
-            (attempt_id, flow_id, databricks_job_id, job_name, status,
+            (attempt_id, flow_name, databricks_job_id, job_name, status,
              started_at, attempt_number, triggered_by)
             VALUES (
                 '{attempt_id}',
-                '{flow_id}',
+                '{flow_name}',
                 '{job_id}',
                 '{job_name}',
                 'CREATING',
@@ -182,7 +182,7 @@ class DeltaService:
                 first_attempt_at = COALESCE(first_attempt_at, current_timestamp()),
                 status = 'CONVERTING',
                 last_updated = current_timestamp()
-            WHERE flow_id = '{flow_id}'
+            WHERE flow_name = '{flow_name}'
         """)
 
         return attempt_id
@@ -228,12 +228,12 @@ class DeltaService:
         except Exception as e:
             raise Exception(f"Failed to update attempt {attempt_id}: {str(e)}")
 
-    def get_flow_history(self, flow_id: str, limit: int = 10) -> list:
+    def get_flow_history(self, flow_name: str, limit: int = 10) -> list:
         """
         Get conversion history for a flow.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow identifier
             limit: Maximum number of attempts to return
 
         Returns:
@@ -243,26 +243,26 @@ class DeltaService:
             df = self.spark.sql(f"""
                 SELECT *
                 FROM main.default.nifi_conversion_history
-                WHERE flow_id = '{flow_id}'
+                WHERE flow_name = '{flow_name}'
                 ORDER BY started_at DESC
                 LIMIT {limit}
             """)
             return [row.asDict() for row in df.collect()]
         except Exception as e:
-            raise Exception(f"Failed to get history for flow {flow_id}: {str(e)}")
+            raise Exception(f"Failed to get history for flow {flow_name}: {str(e)}")
 
-    def get_current_attempt(self, flow_id: str) -> Optional[dict]:
+    def get_current_attempt(self, flow_name: str) -> Optional[dict]:
         """
         Get the current attempt for a flow.
 
         Args:
-            flow_id: Flow identifier
+            flow_name: Flow identifier
 
         Returns:
             Attempt dictionary or None if no current attempt
         """
         try:
-            flow = self.get_flow(flow_id)
+            flow = self.get_flow(flow_name)
             if not flow or not flow.current_attempt_id:
                 return None
 
@@ -274,4 +274,4 @@ class DeltaService:
             rows = df.collect()
             return rows[0].asDict() if rows else None
         except Exception as e:
-            raise Exception(f"Failed to get current attempt for flow {flow_id}: {str(e)}")
+            raise Exception(f"Failed to get current attempt for flow {flow_name}: {str(e)}")

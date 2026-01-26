@@ -3,10 +3,9 @@
 
 CREATE TABLE IF NOT EXISTS main.default.nifi_flows (
   -- Primary Key
-  flow_id STRING NOT NULL COMMENT 'Unique identifier for the flow (derived from XML file path)',
+  flow_name STRING NOT NULL COMMENT 'Flow name (XML filename without .xml extension)',
 
   -- Flow Metadata (Pre-populated from XML)
-  flow_name STRING NOT NULL COMMENT 'Name of the NiFi flow',
   server STRING NOT NULL COMMENT 'NiFi server/environment (derived from folder path)',
   nifi_xml_path STRING NOT NULL COMMENT 'Path to XML file in UC volume',
   description STRING COMMENT 'Flow description (extracted from XML if available)',
@@ -32,7 +31,7 @@ CREATE TABLE IF NOT EXISTS main.default.nifi_flows (
   error_message STRING COMMENT 'Error details if failed',
   status_message STRING COMMENT 'Human-readable status message',
 
-  PRIMARY KEY (flow_id)
+  PRIMARY KEY (flow_name)
 )
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'true'
