@@ -47,7 +47,18 @@ class DeltaService:
         if self._connection is None or not self._connection.open:
             # WorkspaceClient uses default auth chain (app managed identity in Databricks Apps)
             ws_client = WorkspaceClient()
-            token = ws_client.auth.token()
+
+            # Get token from config.authenticate() - returns callable or string token
+            auth_token = ws_client.config.authenticate()
+            if callable(auth_token):
+                # If it's a callable (token provider), call it to get the token
+                token = auth_token()
+            elif hasattr(auth_token, 'token'):
+                # If it has a token() method, call it
+                token = auth_token.token()
+            else:
+                # Otherwise it's the token string itself
+                token = auth_token
 
             logging.info("Connecting to SQL Warehouse with authenticated token from WorkspaceClient")
             self._connection = sql.connect(
