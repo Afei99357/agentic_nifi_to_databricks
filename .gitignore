@@ -182,3 +182,11 @@ meeting_trans_*.txt
 # Local examples and samples
 kick_off_job_example.py
 ui_sample.html
+
+# NiFi XML files (sensitive/test data)
+*.xml
+*_sanitized.xml
+
+# Local image files
+image*.png
+*.png

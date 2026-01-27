@@ -285,15 +285,29 @@ print("=" * 80)
 # COMMAND ----------
 
 def extract_group_id_from_xml(xml_content):
-    """Extract root group ID from NiFi XML."""
+    """
+    Extract group ID from NiFi XML.
+
+    Supports two formats:
+    1. <template><groupId>uuid</groupId></template>  (NiFi templates)
+    2. <rootGroup id="uuid">...</rootGroup>  (NiFi flow definitions)
+    """
     try:
         root = ET.fromstring(xml_content)
+
+        # Try format 1: <template><groupId>
+        group_id_elem = root.find(".//groupId")
+        if group_id_elem is not None and group_id_elem.text:
+            return group_id_elem.text.strip()
+
+        # Try format 2: <rootGroup id="...">
         root_group = root.find(".//rootGroup")
         if root_group is not None:
             group_id = root_group.get("id")
             if group_id:
                 return group_id
-        raise ValueError("No rootGroup id attribute found in XML")
+
+        raise ValueError("No groupId element or rootGroup id attribute found in XML")
     except ET.ParseError as e:
         raise ValueError(f"XML parse error: {e}")
 
@@ -494,10 +508,17 @@ if not has_old_flows and not has_old_history:
 # COMMAND ----------
 
 def extract_group_id_from_xml_path(xml_path):
-    """Extract root group ID from NiFi XML file path."""
+    """Extract group ID from NiFi XML file path."""
     try:
         content = w.files.download(xml_path).contents.read().decode('utf-8')
         root = ET.fromstring(content)
+
+        # Try format 1: <template><groupId>
+        group_id_elem = root.find(".//groupId")
+        if group_id_elem is not None and group_id_elem.text:
+            return group_id_elem.text.strip()
+
+        # Try format 2: <rootGroup id="...">
         root_group = root.find(".//rootGroup")
         if root_group is not None:
             group_id = root_group.get("id")
