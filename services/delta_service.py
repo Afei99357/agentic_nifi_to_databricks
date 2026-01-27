@@ -103,6 +103,7 @@ class DeltaService:
     def list_all_flows(self) -> List[NiFiFlowRecord]:
         """Get all flows from Delta table."""
         import logging
+        import traceback
         try:
             logging.info(f"Connecting to SQL Warehouse to query {self.table_name}")
             conn = self._get_connection()
@@ -110,20 +111,32 @@ class DeltaService:
             cursor = conn.cursor()
 
             logging.info(f"Executing query: SELECT * FROM {self.table_name}")
+
+            # Add query timeout to prevent hanging
+            import time
+            start_time = time.time()
             cursor.execute(f"SELECT * FROM {self.table_name}")
+            query_time = time.time() - start_time
+            logging.info(f"Query executed in {query_time:.2f} seconds")
 
             # Fetch all rows and convert to NiFiFlowRecord objects
             logging.info("Fetching rows...")
             rows = cursor.fetchall()
+            fetch_time = time.time() - start_time
+            logging.info(f"Rows fetched in {fetch_time:.2f} seconds total")
             description = cursor.description
+            logging.info(f"Fetched {len(rows)} rows, closing cursor")
             cursor.close()
 
-            logging.info(f"Successfully fetched {len(rows)} rows from Delta table")
-            return [NiFiFlowRecord.from_dict(self._row_to_dict(row, description))
+            logging.info(f"Converting rows to NiFiFlowRecord objects...")
+            records = [NiFiFlowRecord.from_dict(self._row_to_dict(row, description))
                     for row in rows]
+
+            logging.info(f"Successfully fetched {len(records)} flows from Delta table")
+            return records
         except Exception as e:
-            import logging
             logging.error(f"Error in list_all_flows: {type(e).__name__}: {str(e)}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
             raise Exception(f"Failed to read flows from Delta table: {str(e)}")
 
     def get_flow(self, flow_name: str) -> Optional[NiFiFlowRecord]:
