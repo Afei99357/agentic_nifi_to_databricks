@@ -6,7 +6,6 @@ Uses Databricks SQL Connector for containerized app environments.
 import os
 from typing import List, Optional
 from databricks import sql
-from databricks.sdk.core import Config, oauth_service_principal
 from models.nifi_flow_record import NiFiFlowRecord
 
 
@@ -28,73 +27,36 @@ class DeltaService:
         self.table_name = os.getenv("DELTA_TABLE_NAME", "eliao.nifi_to_databricks.nifi_flows")
         self.history_table_name = "eliao.nifi_to_databricks.nifi_conversion_history"
 
-        # Determine authentication method
-        # Prefer OAuth (native for Databricks Apps), fall back to PAT for local dev
-        self.client_id = os.getenv("DATABRICKS_CLIENT_ID")
-        self.client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
-        self.access_token = os.getenv("DATABRICKS_TOKEN")
-
         # Validate configuration
-        has_oauth = self.client_id and self.client_secret
-        has_pat = self.access_token is not None
-
         if not self.server_hostname or not self.http_path:
             raise ValueError(
                 "Missing required environment variables: "
                 "DATABRICKS_HOST (or DATABRICKS_SERVER_HOSTNAME) and DATABRICKS_HTTP_PATH"
             )
 
-        if not has_oauth and not has_pat:
-            raise ValueError(
-                "Missing authentication credentials. Need either: "
-                "(1) DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET (OAuth), or "
-                "(2) DATABRICKS_TOKEN (PAT)"
-            )
-
-        # Store auth method
-        self.use_oauth = has_oauth
-
         # Connection will be created lazily on first query (not during __init__)
         self._connection = None
 
-        logging.info(f"DeltaService configured: table={self.table_name}, warehouse={self.http_path}, auth={'OAuth' if self.use_oauth else 'PAT'}")
-
-    def _create_oauth_credentials_provider(self):
-        """Create OAuth credentials provider for SQL Connector (Databricks Apps compatible)."""
-        def credential_provider():
-            config = Config(
-                host=f"https://{self.server_hostname}",
-                client_id=self.client_id,
-                client_secret=self.client_secret
-            )
-            return oauth_service_principal(config)
-
-        return credential_provider
+        logging.info(f"DeltaService configured: table={self.table_name}, warehouse={self.http_path}")
 
     def _get_connection(self):
-        """Get or create SQL connection with timeout settings."""
+        """Get or create SQL connection using WorkspaceClient default auth (app managed identity)."""
         import logging
+        from databricks.sdk import WorkspaceClient
+
         if self._connection is None or not self._connection.open:
-            if self.use_oauth:
-                # Use credentials_provider parameter (official OAuth M2M pattern)
-                logging.info("Connecting to SQL Warehouse with OAuth M2M credentials_provider")
-                self._connection = sql.connect(
-                    server_hostname=self.server_hostname,
-                    http_path=self.http_path,
-                    credentials_provider=self._create_oauth_credentials_provider(),
-                    _socket_timeout=120,  # Increased for serverless
-                    _tls_no_verify=False
-                )
-            else:
-                # PAT authentication (local development)
-                logging.info("Connecting with PAT for SQL Warehouse")
-                self._connection = sql.connect(
-                    server_hostname=self.server_hostname,
-                    http_path=self.http_path,
-                    access_token=self.access_token,
-                    _socket_timeout=120,  # Increased for serverless
-                    _tls_no_verify=False
-                )
+            # WorkspaceClient uses default auth chain (app managed identity in Databricks Apps)
+            ws_client = WorkspaceClient()
+            token = ws_client.auth.token()
+
+            logging.info("Connecting to SQL Warehouse with authenticated token from WorkspaceClient")
+            self._connection = sql.connect(
+                server_hostname=self.server_hostname,
+                http_path=self.http_path,
+                access_token=token,
+                _socket_timeout=120,  # Increased for serverless
+                _tls_no_verify=False
+            )
 
             logging.info("✓ SQL Warehouse connection established")
         return self._connection
