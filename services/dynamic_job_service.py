@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import Optional, List, Dict
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
-from databricks.sdk.service.jobs import Task, NotebookTask, ClusterSpec
 import config as app_config
 
 
@@ -33,6 +32,26 @@ class DynamicJobService:
             or os.getenv("AGENT_NOTEBOOK_PATH", "/Workspace/Shared/nifi_conversion_dummy_agent")
         )
         self.logger = logging.getLogger(__name__)
+
+    def _get_cluster_config(self, autotermination_minutes: int = 15) -> dict:
+        """
+        Get standard cluster configuration for jobs.
+
+        Args:
+            autotermination_minutes: Minutes before cluster auto-terminates (default: 15)
+
+        Returns:
+            Dict with cluster configuration
+        """
+        return {
+            "spark_version": app_config.DEFAULT_SPARK_VERSION,
+            "node_type_id": app_config.DEFAULT_NODE_TYPE,
+            "num_workers": app_config.DEFAULT_NUM_WORKERS,
+            "autotermination_minutes": autotermination_minutes,
+            "spark_conf": {
+                "spark.databricks.delta.preview.enabled": "true"
+            }
+        }
 
     def create_conversion_job(
         self,
@@ -63,12 +82,13 @@ class DynamicJobService:
         timestamp = int(datetime.now().timestamp())
         job_name = f"NiFi_Conversion_{flow_name}_{timestamp}"
 
-        # Prepare job configuration using SDK classes
-        task = Task(
-            task_key=f"convert_{flow_name}",
-            notebook_task=NotebookTask(
-                notebook_path=self.agent_notebook_path,
-                base_parameters={
+        # Prepare job configuration using dict-based approach (proven to work)
+        task = {
+            "task_key": f"convert_{flow_name}",
+            "notebook_task": {
+                "notebook_path": self.agent_notebook_path,
+                "source": "WORKSPACE",
+                "base_parameters": {
                     "run_id": run_id,
                     "flow_id": flow_id or "unknown",
                     "flow_name": flow_name,
@@ -77,24 +97,17 @@ class DynamicJobService:
                     "catalog": catalog,
                     "schema": schema
                 }
-            ),
-            new_cluster=ClusterSpec(
-                spark_version="13.3.x-scala2.12",
-                node_type_id="i3.xlarge",
-                num_workers=2,
-                spark_conf={
-                    "spark.databricks.delta.preview.enabled": "true"
-                }
-            ),
-            timeout_seconds=7200,
-            max_retries=0
-        )
+            },
+            "new_cluster": self._get_cluster_config(),
+            "timeout_seconds": app_config.AGENT_TIMEOUT_SECONDS,
+            "max_retries": 0
+        }
 
         job_config = {
             "name": job_name,
             "tasks": [task],
             "max_concurrent_runs": 1,
-            "timeout_seconds": 7200,
+            "timeout_seconds": app_config.AGENT_TIMEOUT_SECONDS,
             "tags": {
                 "flow_name": flow_name,
                 "flow_id": flow_id or "unknown",
@@ -289,32 +302,27 @@ class DynamicJobService:
         timestamp = int(datetime.now().timestamp())
         job_name = f"Execute_{flow_name}_iter{iteration_num}_{timestamp}"
 
-        # Create tasks to run notebooks in parallel using SDK classes
+        # Create tasks to run notebooks in parallel using dict-based approach
         tasks = []
         for i, notebook_path in enumerate(notebook_paths):
-            # Extract notebook name from path
             notebook_name = notebook_path.split('/')[-1].replace('.py', '')
             log_file_path = f"{logs_path}/{notebook_name}.log"
 
-            task = Task(
-                task_key=f"execute_{notebook_name}_{i}",
-                notebook_task=NotebookTask(
-                    notebook_path=notebook_path,
-                    base_parameters={
+            task = {
+                "task_key": f"execute_{notebook_name}_{i}",
+                "notebook_task": {
+                    "notebook_path": notebook_path,
+                    "source": "WORKSPACE",
+                    "base_parameters": {
                         "log_output_path": log_file_path
                     }
-                ),
-                new_cluster=ClusterSpec(
-                    spark_version=app_config.DEFAULT_SPARK_VERSION,
-                    node_type_id=app_config.DEFAULT_NODE_TYPE,
-                    num_workers=app_config.DEFAULT_NUM_WORKERS
-                ),
-                timeout_seconds=app_config.EXECUTION_TIMEOUT_SECONDS,
-                max_retries=0
-            )
+                },
+                "new_cluster": self._get_cluster_config(),
+                "timeout_seconds": app_config.EXECUTION_TIMEOUT_SECONDS,
+                "max_retries": 0
+            }
             tasks.append(task)
 
-        # Prepare job configuration
         job_config = {
             "name": job_name,
             "tasks": tasks,
@@ -396,25 +404,18 @@ class DynamicJobService:
         if previous_notebooks:
             base_parameters["previous_notebooks"] = ",".join(previous_notebooks)
 
-        # Prepare job configuration
-        # Create task using SDK classes to avoid serialization issues
-        task = Task(
-            task_key=f"agent_iter{iteration_num}",
-            notebook_task=NotebookTask(
-                notebook_path=self.agent_notebook_path,
-                base_parameters=base_parameters
-            ),
-            new_cluster=ClusterSpec(
-                spark_version=app_config.DEFAULT_SPARK_VERSION,
-                node_type_id=app_config.DEFAULT_NODE_TYPE,
-                num_workers=app_config.DEFAULT_NUM_WORKERS,
-                spark_conf={
-                    "spark.databricks.delta.preview.enabled": "true"
-                }
-            ),
-            timeout_seconds=app_config.AGENT_TIMEOUT_SECONDS,
-            max_retries=0
-        )
+        # Prepare job configuration using dict-based approach
+        task = {
+            "task_key": f"agent_iter{iteration_num}",
+            "notebook_task": {
+                "notebook_path": self.agent_notebook_path,
+                "source": "WORKSPACE",
+                "base_parameters": base_parameters
+            },
+            "new_cluster": self._get_cluster_config(),
+            "timeout_seconds": app_config.AGENT_TIMEOUT_SECONDS,
+            "max_retries": 0
+        }
 
         job_config = {
             "name": job_name,
