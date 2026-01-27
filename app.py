@@ -11,6 +11,11 @@ from services.notebook_service import NotebookService
 from services.job_deployment import JobDeploymentService
 
 # Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
