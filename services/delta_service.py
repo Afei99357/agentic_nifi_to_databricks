@@ -60,19 +60,33 @@ class DeltaService:
 
     def _get_connection(self):
         """Get or create SQL connection with timeout settings."""
+        import logging
         if self._connection is None or not self._connection.open:
             if self.use_oauth:
-                # Use OAuth authentication (Databricks Apps native)
+                # For Databricks Apps: Get OAuth token from Databricks SDK
+                # The SQL Connector doesn't support M2M OAuth directly, so we get a token from the SDK
+                logging.info("Getting OAuth token from Databricks SDK for SQL connection")
+                from databricks.sdk import WorkspaceClient
+                w = WorkspaceClient()
+
+                # Get OAuth token from the SDK's credentials
+                token = w.config.authenticate()
+                if hasattr(token, 'token'):
+                    access_token = token.token()
+                else:
+                    access_token = token
+
+                logging.info("Using OAuth token for SQL Warehouse connection")
                 self._connection = sql.connect(
                     server_hostname=self.server_hostname,
                     http_path=self.http_path,
-                    client_id=self.client_id,
-                    client_secret=self.client_secret,
+                    access_token=access_token,
                     _socket_timeout=60,  # 60 second timeout
                     _tls_no_verify=False
                 )
             else:
                 # Use PAT authentication (local development)
+                logging.info("Using PAT for SQL Warehouse connection")
                 self._connection = sql.connect(
                     server_hostname=self.server_hostname,
                     http_path=self.http_path,
