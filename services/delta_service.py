@@ -13,7 +13,9 @@ class DeltaService:
     """Interface to read/write the nifi_flows Delta table via SQL Warehouse."""
 
     def __init__(self):
-        """Initialize with SQL Warehouse connection."""
+        """Initialize with SQL Warehouse connection config (connection created lazily)."""
+        import logging
+
         # Get hostname - try DATABRICKS_SERVER_HOSTNAME first, then extract from DATABRICKS_HOST
         self.server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
         if not self.server_hostname:
@@ -51,8 +53,10 @@ class DeltaService:
         # Store auth method
         self.use_oauth = has_oauth
 
-        # Connection will be created per-query
+        # Connection will be created lazily on first query (not during __init__)
         self._connection = None
+
+        logging.info(f"DeltaService configured: table={self.table_name}, warehouse={self.http_path}, auth={'OAuth' if self.use_oauth else 'PAT'}")
 
     def _get_connection(self):
         """Get or create SQL connection with timeout settings."""
