@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.core import Config
+from databricks.sdk.service import jobs
 import config as app_config
 
 
@@ -82,13 +82,13 @@ class DynamicJobService:
         timestamp = int(datetime.now().timestamp())
         job_name = f"NiFi_Conversion_{flow_name}_{timestamp}"
 
-        # Prepare job configuration using dict-based approach (proven to work)
-        task = {
-            "task_key": f"convert_{flow_name}",
-            "notebook_task": {
-                "notebook_path": self.agent_notebook_path,
-                "source": "WORKSPACE",
-                "base_parameters": {
+        # Prepare job configuration using SDK classes (working pattern)
+        task = jobs.Task(
+            task_key=f"convert_{flow_name}",
+            notebook_task=jobs.NotebookTask(
+                notebook_path=self.agent_notebook_path,
+                source=jobs.Source.WORKSPACE,
+                base_parameters={
                     "run_id": run_id,
                     "flow_id": flow_id or "unknown",
                     "flow_name": flow_name,
@@ -97,11 +97,11 @@ class DynamicJobService:
                     "catalog": catalog,
                     "schema": schema
                 }
-            },
-            "new_cluster": self._get_cluster_config(),
-            "timeout_seconds": app_config.AGENT_TIMEOUT_SECONDS,
-            "max_retries": 0
-        }
+            ),
+            new_cluster=self._get_cluster_config(),
+            timeout_seconds=app_config.AGENT_TIMEOUT_SECONDS,
+            max_retries=0
+        )
 
         job_config = {
             "name": job_name,
@@ -302,25 +302,25 @@ class DynamicJobService:
         timestamp = int(datetime.now().timestamp())
         job_name = f"Execute_{flow_name}_iter{iteration_num}_{timestamp}"
 
-        # Create tasks to run notebooks in parallel using dict-based approach
+        # Create tasks to run notebooks in parallel using SDK classes
         tasks = []
         for i, notebook_path in enumerate(notebook_paths):
             notebook_name = notebook_path.split('/')[-1].replace('.py', '')
             log_file_path = f"{logs_path}/{notebook_name}.log"
 
-            task = {
-                "task_key": f"execute_{notebook_name}_{i}",
-                "notebook_task": {
-                    "notebook_path": notebook_path,
-                    "source": "WORKSPACE",
-                    "base_parameters": {
+            task = jobs.Task(
+                task_key=f"execute_{notebook_name}_{i}",
+                notebook_task=jobs.NotebookTask(
+                    notebook_path=notebook_path,
+                    source=jobs.Source.WORKSPACE,
+                    base_parameters={
                         "log_output_path": log_file_path
                     }
-                },
-                "new_cluster": self._get_cluster_config(),
-                "timeout_seconds": app_config.EXECUTION_TIMEOUT_SECONDS,
-                "max_retries": 0
-            }
+                ),
+                new_cluster=self._get_cluster_config(),
+                timeout_seconds=app_config.EXECUTION_TIMEOUT_SECONDS,
+                max_retries=0
+            )
             tasks.append(task)
 
         job_config = {
@@ -404,18 +404,18 @@ class DynamicJobService:
         if previous_notebooks:
             base_parameters["previous_notebooks"] = ",".join(previous_notebooks)
 
-        # Prepare job configuration using dict-based approach
-        task = {
-            "task_key": f"agent_iter{iteration_num}",
-            "notebook_task": {
-                "notebook_path": self.agent_notebook_path,
-                "source": "WORKSPACE",
-                "base_parameters": base_parameters
-            },
-            "new_cluster": self._get_cluster_config(),
-            "timeout_seconds": app_config.AGENT_TIMEOUT_SECONDS,
-            "max_retries": 0
-        }
+        # Prepare job configuration using SDK classes (working pattern)
+        task = jobs.Task(
+            task_key=f"agent_iter{iteration_num}",
+            notebook_task=jobs.NotebookTask(
+                notebook_path=self.agent_notebook_path,
+                source=jobs.Source.WORKSPACE,
+                base_parameters=base_parameters
+            ),
+            new_cluster=self._get_cluster_config(),
+            timeout_seconds=app_config.AGENT_TIMEOUT_SECONDS,
+            max_retries=0
+        )
 
         job_config = {
             "name": job_name,
