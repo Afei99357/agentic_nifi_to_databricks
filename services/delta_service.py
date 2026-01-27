@@ -37,7 +37,10 @@ class DeltaService:
         from databricks.sdk import WorkspaceClient
 
         if self._connection is None or not self._connection.open:
-            logging.info(f"Connecting to SQL Warehouse: host={self.cfg.host}, warehouse={self.cfg.warehouse_id}")
+            # Strip https:// from host if present (sql.connect expects just hostname)
+            server_hostname = self.cfg.host.replace("https://", "").replace("http://", "")
+
+            logging.info(f"Connecting to SQL Warehouse: host={server_hostname}, warehouse={self.cfg.warehouse_id}")
 
             try:
                 # Get access token from WorkspaceClient
@@ -60,7 +63,7 @@ class DeltaService:
 
                 # Use access_token instead of credentials_provider
                 self._connection = sql.connect(
-                    server_hostname=self.cfg.host,
+                    server_hostname=server_hostname,
                     http_path=f"/sql/1.0/warehouses/{self.cfg.warehouse_id}",
                     access_token=access_token,
                     _socket_timeout=120,
