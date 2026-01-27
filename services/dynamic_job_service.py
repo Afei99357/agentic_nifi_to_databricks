@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, List, Dict
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
+from databricks.sdk.service.jobs import Task, NotebookTask, ClusterSpec
 import config as app_config
 
 
@@ -62,36 +63,36 @@ class DynamicJobService:
         timestamp = int(datetime.now().timestamp())
         job_name = f"NiFi_Conversion_{flow_name}_{timestamp}"
 
-        # Prepare job configuration
+        # Prepare job configuration using SDK classes
+        task = Task(
+            task_key=f"convert_{flow_name}",
+            notebook_task=NotebookTask(
+                notebook_path=self.agent_notebook_path,
+                base_parameters={
+                    "run_id": run_id,
+                    "flow_id": flow_id or "unknown",
+                    "flow_name": flow_name,
+                    "nifi_xml_path": nifi_xml_path,
+                    "output_path": f"/Volumes/{catalog}/{schema}/nifi_notebooks/{flow_name}",
+                    "catalog": catalog,
+                    "schema": schema
+                }
+            ),
+            new_cluster=ClusterSpec(
+                spark_version="13.3.x-scala2.12",
+                node_type_id="i3.xlarge",
+                num_workers=2,
+                spark_conf={
+                    "spark.databricks.delta.preview.enabled": "true"
+                }
+            ),
+            timeout_seconds=7200,
+            max_retries=0
+        )
+
         job_config = {
             "name": job_name,
-            "tasks": [
-                {
-                    "task_key": f"convert_{flow_name}",
-                    "notebook_task": {
-                        "notebook_path": self.agent_notebook_path,
-                        "base_parameters": {
-                            "run_id": run_id,                                          # NEW: migration run ID
-                            "flow_id": flow_id or "unknown",                           # NEW: UUID from XML
-                            "flow_name": flow_name,                                    # Keep for display/folder name
-                            "nifi_xml_path": nifi_xml_path,
-                            "output_path": f"/Volumes/{catalog}/{schema}/nifi_notebooks/{flow_name}",
-                            "catalog": catalog,                                        # NEW: for migration tables
-                            "schema": schema                                           # NEW: for migration tables
-                        }
-                    },
-                    "new_cluster": {
-                        "spark_version": "13.3.x-scala2.12",
-                        "node_type_id": "i3.xlarge",
-                        "num_workers": 2,
-                        "spark_conf": {
-                            "spark.databricks.delta.preview.enabled": "true"
-                        }
-                    },
-                    "timeout_seconds": 7200,  # 2 hours
-                    "max_retries": 0
-                }
-            ],
+            "tasks": [task],
             "max_concurrent_runs": 1,
             "timeout_seconds": 7200,
             "tags": {
@@ -288,29 +289,30 @@ class DynamicJobService:
         timestamp = int(datetime.now().timestamp())
         job_name = f"Execute_{flow_name}_iter{iteration_num}_{timestamp}"
 
-        # Create tasks to run notebooks in parallel
+        # Create tasks to run notebooks in parallel using SDK classes
         tasks = []
         for i, notebook_path in enumerate(notebook_paths):
             # Extract notebook name from path
             notebook_name = notebook_path.split('/')[-1].replace('.py', '')
             log_file_path = f"{logs_path}/{notebook_name}.log"
 
-            tasks.append({
-                "task_key": f"execute_{notebook_name}_{i}",
-                "notebook_task": {
-                    "notebook_path": notebook_path,
-                    "base_parameters": {
+            task = Task(
+                task_key=f"execute_{notebook_name}_{i}",
+                notebook_task=NotebookTask(
+                    notebook_path=notebook_path,
+                    base_parameters={
                         "log_output_path": log_file_path
                     }
-                },
-                "new_cluster": {
-                    "spark_version": app_config.DEFAULT_SPARK_VERSION,
-                    "node_type_id": app_config.DEFAULT_NODE_TYPE,
-                    "num_workers": app_config.DEFAULT_NUM_WORKERS
-                },
-                "timeout_seconds": app_config.EXECUTION_TIMEOUT_SECONDS,
-                "max_retries": 0
-            })
+                ),
+                new_cluster=ClusterSpec(
+                    spark_version=app_config.DEFAULT_SPARK_VERSION,
+                    node_type_id=app_config.DEFAULT_NODE_TYPE,
+                    num_workers=app_config.DEFAULT_NUM_WORKERS
+                ),
+                timeout_seconds=app_config.EXECUTION_TIMEOUT_SECONDS,
+                max_retries=0
+            )
+            tasks.append(task)
 
         # Prepare job configuration
         job_config = {
@@ -395,27 +397,28 @@ class DynamicJobService:
             base_parameters["previous_notebooks"] = ",".join(previous_notebooks)
 
         # Prepare job configuration
+        # Create task using SDK classes to avoid serialization issues
+        task = Task(
+            task_key=f"agent_iter{iteration_num}",
+            notebook_task=NotebookTask(
+                notebook_path=self.agent_notebook_path,
+                base_parameters=base_parameters
+            ),
+            new_cluster=ClusterSpec(
+                spark_version=app_config.DEFAULT_SPARK_VERSION,
+                node_type_id=app_config.DEFAULT_NODE_TYPE,
+                num_workers=app_config.DEFAULT_NUM_WORKERS,
+                spark_conf={
+                    "spark.databricks.delta.preview.enabled": "true"
+                }
+            ),
+            timeout_seconds=app_config.AGENT_TIMEOUT_SECONDS,
+            max_retries=0
+        )
+
         job_config = {
             "name": job_name,
-            "tasks": [
-                {
-                    "task_key": f"agent_iter{iteration_num}",
-                    "notebook_task": {
-                        "notebook_path": self.agent_notebook_path,
-                        "base_parameters": base_parameters
-                    },
-                    "new_cluster": {
-                        "spark_version": app_config.DEFAULT_SPARK_VERSION,
-                        "node_type_id": app_config.DEFAULT_NODE_TYPE,
-                        "num_workers": app_config.DEFAULT_NUM_WORKERS,
-                        "spark_conf": {
-                            "spark.databricks.delta.preview.enabled": "true"
-                        }
-                    },
-                    "timeout_seconds": app_config.AGENT_TIMEOUT_SECONDS,
-                    "max_retries": 0
-                }
-            ],
+            "tasks": [task],
             "max_concurrent_runs": 1,
             "timeout_seconds": app_config.AGENT_TIMEOUT_SECONDS,
             "tags": {
