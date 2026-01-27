@@ -5,7 +5,6 @@ Complete Setup for NiFi Migration System (Cori's Architecture)
 This notebook performs the complete setup:
 1. Creates all 7 migration_* tables
 2. Ingests XML files from UC volume into migration_flows
-3. Migrates existing data from old schema (if applicable)
 
 Philosophy: "The App should never 'compute' progress. It should display
             the latest rows and statuses written by the job."
@@ -30,14 +29,9 @@ SCHEMA = "nifi_to_databricks"
 VOLUME_NAME = "nifi_files"
 VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME_NAME}"
 
-# Old tables (for migration, if they exist)
-OLD_FLOWS_TABLE = f"{CATALOG}.{SCHEMA}.nifi_flows"
-OLD_HISTORY_TABLE = f"{CATALOG}.{SCHEMA}.nifi_conversion_history"
-
 print(f"Configuration:")
 print(f"  - Catalog/Schema: {CATALOG}.{SCHEMA}")
 print(f"  - Volume path: {VOLUME_PATH}")
-print(f"  - Old flows table: {OLD_FLOWS_TABLE}")
 
 # COMMAND ----------
 
@@ -462,291 +456,17 @@ if len(xml_files) > 0 and flows:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Part 3: Migrate Existing Data (Optional)
-# MAGIC
-# MAGIC Migrates data from old nifi_flows and nifi_conversion_history tables if they exist.
-
-# COMMAND ----------
-
-print("=" * 80)
-print("PART 3: Migrating Existing Data (if old tables exist)")
-print("=" * 80)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Check if Old Tables Exist
-
-# COMMAND ----------
-
-try:
-    old_flows_count = spark.sql(f"SELECT COUNT(*) FROM {OLD_FLOWS_TABLE}").collect()[0][0]
-    print(f"✓ Found old flows table: {old_flows_count} rows")
-    has_old_flows = True
-except:
-    print(f"⚠️ Old flows table not found: {OLD_FLOWS_TABLE}")
-    has_old_flows = False
-
-try:
-    old_history_count = spark.sql(f"SELECT COUNT(*) FROM {OLD_HISTORY_TABLE}").collect()[0][0]
-    print(f"✓ Found old history table: {old_history_count} rows")
-    has_old_history = True
-except:
-    print(f"⚠️ Old history table not found: {OLD_HISTORY_TABLE}")
-    has_old_history = False
-
-if not has_old_flows and not has_old_history:
-    print("\n✅ Part 3 Complete: No old data to migrate (fresh setup)")
-    print("="*80)
-    dbutils.notebook.exit("Setup complete - no migration needed")  # type: ignore
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Helper Functions for Migration
-
-# COMMAND ----------
-
-def extract_group_id_from_xml_path(xml_path):
-    """Extract group ID from NiFi XML file path."""
-    try:
-        content = w.files.download(xml_path).contents.read().decode('utf-8')
-        root = ET.fromstring(content)
-
-        # Try format 1: <template><groupId>
-        group_id_elem = root.find(".//groupId")
-        if group_id_elem is not None and group_id_elem.text:
-            return group_id_elem.text.strip()
-
-        # Try format 2: <rootGroup id="...">
-        root_group = root.find(".//rootGroup")
-        if root_group is not None:
-            group_id = root_group.get("id")
-            if group_id:
-                return group_id
-    except Exception as e:
-        print(f"  ⚠️ Error parsing {xml_path}: {e}")
-    return None
-
-
-def map_old_status_to_new(old_status):
-    """Map old status values to new migration_status values."""
-    status_map = {
-        'NEEDS_ATTENTION': 'NEEDS_HUMAN',
-        'CONVERTING': 'RUNNING',
-        'NOT_STARTED': 'NOT_STARTED',
-        'DONE': 'DONE',
-        'FAILED': 'FAILED'
-    }
-    return status_map.get(old_status, old_status)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Migrate Flows Table
-
-# COMMAND ----------
-
-if has_old_flows:
-    print("Migrating flows from old schema...")
-
-    old_flows_df = spark.sql(f"SELECT * FROM {OLD_FLOWS_TABLE}")
-    old_flows = old_flows_df.collect()
-
-    migrated_flows = []
-
-    for i, flow in enumerate(old_flows, 1):
-        flow_name = flow['flow_name']
-        nifi_xml_path = flow.get('nifi_xml_path')
-
-        print(f"[{i}/{len(old_flows)}] Processing: {flow_name}")
-
-        # Extract flow_id from XML
-        flow_id = None
-        if nifi_xml_path:
-            flow_id = extract_group_id_from_xml_path(nifi_xml_path)
-
-        # If can't extract, generate from hash
-        if not flow_id:
-            import hashlib, uuid
-            name_hash = hashlib.md5(flow_name.encode()).hexdigest()
-            flow_id = str(uuid.UUID(name_hash))
-            print(f"  ⚠️ Generated flow_id from hash: {flow_id}")
-
-        # Map status
-        old_status = flow.get('status', 'NOT_STARTED')
-        new_status = map_old_status_to_new(old_status)
-
-        # Convert attempt_id to run_id
-        current_run_id = None
-        if flow.get('current_attempt_id'):
-            attempt_id = flow['current_attempt_id']
-            if '_attempt_' in attempt_id:
-                timestamp = attempt_id.split('_attempt_')[1]
-                current_run_id = f"{flow_id}_run_{timestamp}"
-
-        migrated_flow = {
-            'flow_id': flow_id,
-            'flow_name': flow_name,
-            'migration_status': new_status,
-            'current_run_id': current_run_id,
-            'last_update_ts': flow.get('last_updated'),
-            'server': flow.get('server'),
-            'nifi_xml_path': nifi_xml_path,
-            'description': flow.get('description'),
-            'priority': flow.get('priority'),
-            'owner': flow.get('owner')
-        }
-
-        migrated_flows.append(migrated_flow)
-        print(f"  ✓ Migrated: {flow_id}")
-
-    # Insert into migration_flows
-    from pyspark.sql.types import StructType, StructField, StringType, TimestampType
-
-    schema = StructType([
-        StructField("flow_id", StringType(), False),
-        StructField("flow_name", StringType(), False),
-        StructField("migration_status", StringType(), False),
-        StructField("current_run_id", StringType(), True),
-        StructField("last_update_ts", TimestampType(), True),
-        StructField("server", StringType(), True),
-        StructField("nifi_xml_path", StringType(), True),
-        StructField("description", StringType(), True),
-        StructField("priority", StringType(), True),
-        StructField("owner", StringType(), True)
-    ])
-
-    migrated_df = spark.createDataFrame(migrated_flows, schema=schema)
-
-    # Merge (don't overwrite existing flows from XML ingestion)
-    migrated_df.createOrReplaceTempView("migrated_flows")
-    spark.sql(f"""
-        MERGE INTO {CATALOG}.{SCHEMA}.migration_flows AS target
-        USING migrated_flows AS source
-        ON target.flow_id = source.flow_id
-        WHEN NOT MATCHED THEN INSERT *
-    """)
-
-    print(f"\n✅ Migrated {len(migrated_flows)} flows from old schema")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Migrate History Table
-
-# COMMAND ----------
-
-if has_old_history:
-    print("Migrating history from old schema...")
-
-    # Get flow_name to flow_id mapping
-    flow_mapping_df = spark.sql(f"SELECT flow_name, flow_id FROM {CATALOG}.{SCHEMA}.migration_flows")
-    flow_mapping = {row['flow_name']: row['flow_id'] for row in flow_mapping_df.collect()}
-
-    old_history_df = spark.sql(f"SELECT * FROM {OLD_HISTORY_TABLE}")
-    old_history = old_history_df.collect()
-
-    migrated_runs = []
-    migrated_iterations = []
-
-    for i, history in enumerate(old_history, 1):
-        attempt_id = history['attempt_id']
-        flow_name = history['flow_name']
-
-        flow_id = flow_mapping.get(flow_name)
-        if not flow_id:
-            print(f"  ⚠️ Flow {flow_name} not found, skipping")
-            continue
-
-        # Convert attempt_id to run_id
-        if '_attempt_' in attempt_id:
-            timestamp = attempt_id.split('_attempt_')[1]
-            run_id = f"{flow_id}_run_{timestamp}"
-        else:
-            ts = int(datetime.now().timestamp())
-            run_id = f"{flow_id}_run_{ts}"
-
-        old_status = history.get('status', 'FAILED')
-
-        migrated_run = {
-            'run_id': run_id,
-            'flow_id': flow_id,
-            'job_run_id': history.get('databricks_run_id'),
-            'start_ts': history.get('started_at'),
-            'end_ts': history.get('completed_at'),
-            'status': old_status
-        }
-        migrated_runs.append(migrated_run)
-
-        # Create placeholder iteration
-        iteration_summary = f"Migrated from old schema: {old_status}"
-        migrated_iteration = {
-            'run_id': run_id,
-            'iteration_num': 1,
-            'step': 'migration_placeholder',
-            'step_status': 'COMPLETED' if old_status == 'SUCCESS' else 'FAILED',
-            'ts': history.get('completed_at') or history.get('started_at'),
-            'summary': iteration_summary,
-            'error': history.get('error_message')
-        }
-        migrated_iterations.append(migrated_iteration)
-
-    # Insert runs
-    if migrated_runs:
-        from pyspark.sql.types import TimestampType
-
-        runs_schema = StructType([
-            StructField("run_id", StringType(), False),
-            StructField("flow_id", StringType(), False),
-            StructField("job_run_id", StringType(), True),
-            StructField("start_ts", TimestampType(), True),
-            StructField("end_ts", TimestampType(), True),
-            StructField("status", StringType(), False)
-        ])
-
-        runs_df = spark.createDataFrame(migrated_runs, schema=runs_schema)
-        runs_df.write.format("delta").mode("append").saveAsTable(f"{CATALOG}.{SCHEMA}.migration_runs")
-        print(f"✅ Migrated {len(migrated_runs)} runs")
-
-    # Insert iterations
-    if migrated_iterations:
-        from pyspark.sql.types import IntegerType
-
-        iterations_schema = StructType([
-            StructField("run_id", StringType(), False),
-            StructField("iteration_num", IntegerType(), False),
-            StructField("step", StringType(), False),
-            StructField("step_status", StringType(), False),
-            StructField("ts", TimestampType(), True),
-            StructField("summary", StringType(), True),
-            StructField("error", StringType(), True)
-        ])
-
-        iterations_df = spark.createDataFrame(migrated_iterations, schema=iterations_schema)
-        iterations_df.write.format("delta").mode("append").saveAsTable(f"{CATALOG}.{SCHEMA}.migration_iterations")
-        print(f"✅ Migrated {len(migrated_iterations)} iterations")
-
-print(f"\n{'='*80}")
-print("✅ Part 3 Complete: Migration finished")
-print("="*80)
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC # Setup Complete!
 # MAGIC
 # MAGIC ## Summary
 # MAGIC
 # MAGIC ✅ **Part 1**: Created 7 migration tables
 # MAGIC ✅ **Part 2**: Ingested XML files from UC volume
-# MAGIC ✅ **Part 3**: Migrated existing data (if applicable)
 # MAGIC
 # MAGIC ## Next Steps
 # MAGIC
 # MAGIC 1. **Start the Flask app** and verify it can read from the new tables
 # MAGIC 2. **Test a conversion** to ensure the new schema works end-to-end
-# MAGIC 3. **Once verified**, you can drop the old tables: `nifi_flows`, `nifi_conversion_history`
 # MAGIC
 # MAGIC ---
 # MAGIC
