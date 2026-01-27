@@ -60,6 +60,7 @@ print("="*80)
 print("SECTION 1: Environment Check")
 print("="*80)
 
+# Check environment variables (for Databricks Apps)
 env_vars = {
     'DATABRICKS_HOST': os.getenv('DATABRICKS_HOST'),
     'DATABRICKS_WAREHOUSE_ID': os.getenv('DATABRICKS_WAREHOUSE_ID'),
@@ -68,15 +69,38 @@ env_vars = {
     'DATABRICKS_TOKEN': '***' if os.getenv('DATABRICKS_TOKEN') else None,
 }
 
-print("\nEnvironment Variables:")
+print("\nEnvironment Variables (Databricks Apps):")
 for key, value in env_vars.items():
     status = "✓" if value else "✗"
     print(f"  {status} {key}: {value}")
 
+# Get warehouse_id from environment or widget
 warehouse_id = os.getenv('DATABRICKS_WAREHOUSE_ID')
+
+# For regular notebooks, get host from workspace context
+try:
+    workspace_host = spark.conf.get("spark.databricks.workspaceUrl")
+    print(f"\n✓ Workspace Host (from Spark): {workspace_host}")
+except:
+    workspace_host = None
+    print(f"\n✗ Could not get workspace host from Spark context")
+
+# Set warehouse_id if not in environment (for notebook testing)
 if not warehouse_id:
-    print("\n⚠ WARNING: DATABRICKS_WAREHOUSE_ID not set!")
-    print("  Set it with: export DATABRICKS_WAREHOUSE_ID='your-warehouse-id'")
+    print("\n⚠ DATABRICKS_WAREHOUSE_ID not set!")
+    print("  For Databricks Apps: Set in app.yaml")
+    print("  For notebook testing: Set warehouse_id below")
+
+    # IMPORTANT: Set your warehouse ID here for notebook testing
+    warehouse_id = "6197de40f3098d2b"  # TODO: Replace with your warehouse ID
+
+    if warehouse_id:
+        os.environ['DATABRICKS_WAREHOUSE_ID'] = warehouse_id
+        print(f"\n✓ Using warehouse_id: {warehouse_id}")
+    else:
+        print("\n✗ No warehouse_id configured!")
+else:
+    print(f"\n✓ Using warehouse_id from environment: {warehouse_id}")
 
 # COMMAND ----------
 
