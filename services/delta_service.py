@@ -36,15 +36,13 @@ class DeltaService:
         import logging
 
         if self._connection is None or not self._connection.open:
-            # Strip https:// from host if present (sql.connect expects just hostname)
-            server_hostname = self.cfg.host.replace("https://", "").replace("http://", "")
-
-            logging.info(f"Connecting to SQL Warehouse: host={server_hostname}, warehouse={self.cfg.warehouse_id}")
+            logging.info(f"Connecting to SQL Warehouse: host={self.cfg.host}, warehouse={self.cfg.warehouse_id}")
 
             try:
-                # Exact pattern from official Dash template (line 21-25)
+                # Exact pattern from official Dash template (notebooks/dataapptmp/app.py lines 21-24)
+                # Note: Use cfg.host directly, do NOT strip protocol
                 self._connection = sql.connect(
-                    server_hostname=server_hostname,
+                    server_hostname=self.cfg.host,
                     http_path=f"/sql/1.0/warehouses/{self.cfg.warehouse_id}",
                     credentials_provider=lambda: self.cfg.authenticate
                 )
