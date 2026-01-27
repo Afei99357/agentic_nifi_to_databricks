@@ -14,8 +14,19 @@
 # MAGIC 7. Diagnostics Summary - Review results and recommendations
 # MAGIC
 # MAGIC **Instructions:**
-# MAGIC 1. Attach to a cluster with databricks-sdk installed
+# MAGIC 1. Attach to a cluster
 # MAGIC 2. Run all cells to diagnose connection issues
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Install Required Packages
+
+# COMMAND ----------
+
+# Install required packages
+%pip install databricks-sql-connector databricks-sdk --quiet
+dbutils.library.restartPython()
 
 # COMMAND ----------
 
