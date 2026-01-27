@@ -238,24 +238,14 @@ print("✅ Created: migration_human_requests")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Create Indexes
+# MAGIC ## Indexes (Not Required in Unity Catalog)
+# MAGIC
+# MAGIC Unity Catalog automatically optimizes queries without explicit indexes.
+# MAGIC Delta tables use internal data skipping and Z-ordering for performance.
 
 # COMMAND ----------
 
-print("Creating indexes...")
-
-# migration_flows indexes
-spark.sql(f"CREATE INDEX IF NOT EXISTS idx_migration_flows_flow_name ON {CATALOG}.{SCHEMA}.migration_flows(flow_name)")
-spark.sql(f"CREATE INDEX IF NOT EXISTS idx_migration_flows_status ON {CATALOG}.{SCHEMA}.migration_flows(migration_status)")
-
-# migration_runs indexes
-spark.sql(f"CREATE INDEX IF NOT EXISTS idx_migration_runs_flow_id ON {CATALOG}.{SCHEMA}.migration_runs(flow_id)")
-spark.sql(f"CREATE INDEX IF NOT EXISTS idx_migration_runs_status ON {CATALOG}.{SCHEMA}.migration_runs(status)")
-
-# migration_iterations indexes
-spark.sql(f"CREATE INDEX IF NOT EXISTS idx_migration_iterations_run_id ON {CATALOG}.{SCHEMA}.migration_iterations(run_id)")
-
-print("✅ Created all indexes")
+print("✅ Indexes: Unity Catalog handles optimization automatically (no explicit indexes needed)")
 
 # COMMAND ----------
 
