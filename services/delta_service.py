@@ -18,17 +18,8 @@ class DeltaService:
         import logging
 
         # Use Config class (official Databricks Apps pattern)
+        # Config automatically loads warehouse_id from DATABRICKS_WAREHOUSE_ID env var
         self.cfg = Config()
-
-        # Set warehouse ID from environment
-        warehouse_id = os.getenv("DATABRICKS_WAREHOUSE_ID")
-        if not warehouse_id:
-            # Fall back to extracting from DATABRICKS_HTTP_PATH
-            http_path = os.getenv("DATABRICKS_HTTP_PATH")
-            if http_path:
-                warehouse_id = http_path.split('/')[-1]
-
-        self.cfg.warehouse_id = warehouse_id
 
         self.table_name = os.getenv("DELTA_TABLE_NAME", "eliao.nifi_to_databricks.nifi_flows")
         self.history_table_name = "eliao.nifi_to_databricks.nifi_conversion_history"
@@ -36,25 +27,52 @@ class DeltaService:
         # Connection will be created lazily
         self._connection = None
 
+        # Log the warehouse ID that Config discovered
+        warehouse_id = getattr(self.cfg, 'warehouse_id', 'NOT_SET')
         logging.info(f"DeltaService configured: table={self.table_name}, warehouse={warehouse_id}")
 
     def _get_connection(self):
         """Get or create SQL connection using official Databricks Apps pattern."""
         import logging
+        from databricks.sdk import WorkspaceClient
 
         if self._connection is None or not self._connection.open:
-            logging.info("Connecting to SQL Warehouse with Config.authenticate")
+            logging.info(f"Connecting to SQL Warehouse: host={self.cfg.host}, warehouse={self.cfg.warehouse_id}")
 
-            # Official pattern from Dash template
-            self._connection = sql.connect(
-                server_hostname=self.cfg.host,
-                http_path=f"/sql/1.0/warehouses/{self.cfg.warehouse_id}",
-                credentials_provider=lambda: self.cfg.authenticate,  # Pass callable, don't call it!
-                _socket_timeout=120,
-                _tls_no_verify=False
-            )
+            try:
+                # Get access token from WorkspaceClient
+                ws = WorkspaceClient()
+                # The auth header is in format "Bearer <token>"
+                auth_header = ws.config.authenticate()
 
-            logging.info("✓ SQL Warehouse connection established")
+                # Extract token if it's a callable
+                if callable(auth_header):
+                    token_result = auth_header()
+                    # Token result might be a dict with 'Authorization' key
+                    if isinstance(token_result, dict) and 'Authorization' in token_result:
+                        access_token = token_result['Authorization'].replace('Bearer ', '')
+                    else:
+                        access_token = str(token_result).replace('Bearer ', '')
+                else:
+                    access_token = str(auth_header).replace('Bearer ', '')
+
+                logging.info(f"Got access token (length: {len(access_token)})")
+
+                # Use access_token instead of credentials_provider
+                self._connection = sql.connect(
+                    server_hostname=self.cfg.host,
+                    http_path=f"/sql/1.0/warehouses/{self.cfg.warehouse_id}",
+                    access_token=access_token,
+                    _socket_timeout=120,
+                    _tls_no_verify=False
+                )
+                logging.info("✓ SQL Warehouse connection established")
+            except Exception as e:
+                logging.error(f"Connection failed: {type(e).__name__}: {str(e)}")
+                import traceback
+                logging.error(f"Traceback: {traceback.format_exc()}")
+                raise
+
         return self._connection
 
     def _row_to_dict(self, row, description):
