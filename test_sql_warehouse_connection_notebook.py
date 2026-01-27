@@ -24,9 +24,8 @@
 
 # COMMAND ----------
 
-# Install required packages
+# Install required packages (they will be available immediately after installation)
 %pip install databricks-sql-connector databricks-sdk --quiet
-dbutils.library.restartPython()
 
 # COMMAND ----------
 
