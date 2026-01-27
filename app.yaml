@@ -11,6 +11,10 @@ env:
 
   # SQL Warehouse connection (for Delta table access via SQL Connector)
   # Note: DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET are automatically provided by Databricks Apps
+  - name: DATABRICKS_WAREHOUSE_ID
+    value: "6197de40f3098d2b"
+
+  # Keep HTTP_PATH as fallback for compatibility
   - name: DATABRICKS_HTTP_PATH
     value: "/sql/1.0/warehouses/6197de40f3098d2b"
 

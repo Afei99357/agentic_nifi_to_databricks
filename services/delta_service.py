@@ -6,6 +6,7 @@ Uses Databricks SQL Connector for containerized app environments.
 import os
 from typing import List, Optional
 from databricks import sql
+from databricks.sdk.core import Config
 from models.nifi_flow_record import NiFiFlowRecord
 
 
@@ -13,60 +14,43 @@ class DeltaService:
     """Interface to read/write the nifi_flows Delta table via SQL Warehouse."""
 
     def __init__(self):
-        """Initialize with SQL Warehouse connection config (connection created lazily)."""
+        """Initialize with SQL Warehouse configuration using Config class."""
         import logging
 
-        # Get hostname - try DATABRICKS_SERVER_HOSTNAME first, then extract from DATABRICKS_HOST
-        self.server_hostname = os.getenv("DATABRICKS_SERVER_HOSTNAME")
-        if not self.server_hostname:
-            databricks_host = os.getenv("DATABRICKS_HOST", "")
-            # Extract hostname from URL (remove https:// prefix)
-            self.server_hostname = databricks_host.replace("https://", "").replace("http://", "")
+        # Use Config class (official Databricks Apps pattern)
+        self.cfg = Config()
 
-        self.http_path = os.getenv("DATABRICKS_HTTP_PATH")
+        # Set warehouse ID from environment
+        warehouse_id = os.getenv("DATABRICKS_WAREHOUSE_ID")
+        if not warehouse_id:
+            # Fall back to extracting from DATABRICKS_HTTP_PATH
+            http_path = os.getenv("DATABRICKS_HTTP_PATH")
+            if http_path:
+                warehouse_id = http_path.split('/')[-1]
+
+        self.cfg.warehouse_id = warehouse_id
+
         self.table_name = os.getenv("DELTA_TABLE_NAME", "eliao.nifi_to_databricks.nifi_flows")
         self.history_table_name = "eliao.nifi_to_databricks.nifi_conversion_history"
 
-        # Validate configuration
-        if not self.server_hostname or not self.http_path:
-            raise ValueError(
-                "Missing required environment variables: "
-                "DATABRICKS_HOST (or DATABRICKS_SERVER_HOSTNAME) and DATABRICKS_HTTP_PATH"
-            )
-
-        # Connection will be created lazily on first query (not during __init__)
+        # Connection will be created lazily
         self._connection = None
 
-        logging.info(f"DeltaService configured: table={self.table_name}, warehouse={self.http_path}")
+        logging.info(f"DeltaService configured: table={self.table_name}, warehouse={warehouse_id}")
 
     def _get_connection(self):
-        """Get or create SQL connection using credentials_provider (required for Databricks Apps)."""
+        """Get or create SQL connection using official Databricks Apps pattern."""
         import logging
-        from databricks.sdk import WorkspaceClient
 
         if self._connection is None or not self._connection.open:
-            # Get credentials provider from WorkspaceClient (uses app managed identity)
-            ws_client = WorkspaceClient()
+            logging.info("Connecting to SQL Warehouse with Config.authenticate")
 
-            # Use the SDK's credential provider directly - this is the pattern that works in Databricks Apps
-            # The credentials_provider parameter is required to avoid hanging (GitHub issue #651)
-            def credentials_provider():
-                """Credentials provider using WorkspaceClient's auth."""
-                # Get token from SDK's authenticate method
-                auth_result = ws_client.config.authenticate()
-                if callable(auth_result):
-                    return auth_result()
-                elif hasattr(auth_result, 'token'):
-                    return auth_result.token()
-                else:
-                    return auth_result
-
-            logging.info("Connecting to SQL Warehouse with credentials_provider from WorkspaceClient")
+            # Official pattern from Dash template
             self._connection = sql.connect(
-                server_hostname=self.server_hostname,
-                http_path=self.http_path,
-                credentials_provider=credentials_provider,  # Required for Databricks Apps
-                _socket_timeout=120,  # Increased for serverless
+                server_hostname=self.cfg.host,
+                http_path=f"/sql/1.0/warehouses/{self.cfg.warehouse_id}",
+                credentials_provider=lambda: self.cfg.authenticate,  # Pass callable, don't call it!
+                _socket_timeout=120,
                 _tls_no_verify=False
             )
 
