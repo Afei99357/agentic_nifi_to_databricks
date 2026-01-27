@@ -20,11 +20,27 @@ flask_app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
 
 # Initialize services
 try:
+    logging.info("Starting service initialization...")
+    logging.info("Initializing DatabricksClientWrapper...")
     databricks_client = DatabricksClientWrapper()
+    logging.info("✓ DatabricksClientWrapper initialized")
+
+    logging.info("Initializing DeltaService...")
     delta_service = DeltaService()
+    logging.info("✓ DeltaService initialized")
+
+    logging.info("Initializing FlowService...")
     flow_service = FlowService(delta_service)
+    logging.info("✓ FlowService initialized")
+
+    logging.info("Initializing NotebookService...")
     notebook_service = NotebookService(databricks_client)
+    logging.info("✓ NotebookService initialized")
+
+    logging.info("Initializing JobDeploymentService...")
     job_deployment_service = JobDeploymentService(databricks_client)
+    logging.info("✓ JobDeploymentService initialized")
+
     logging.info("All services initialized successfully")
 except ValueError as e:
     # Configuration error (missing env vars)
