@@ -5,7 +5,7 @@ from werkzeug.exceptions import HTTPException
 import io
 
 from utils.databricks_client import DatabricksClientWrapper
-from services.delta_service import DeltaService
+from services.migration_service import MigrationService
 from services.flow_service import FlowService
 from services.notebook_service import NotebookService
 from services.job_deployment import JobDeploymentService
@@ -30,12 +30,12 @@ try:
     databricks_client = DatabricksClientWrapper()
     logging.info("✓ DatabricksClientWrapper initialized")
 
-    logging.info("Initializing DeltaService...")
-    delta_service = DeltaService()
-    logging.info("✓ DeltaService initialized")
+    logging.info("Initializing MigrationService (new schema)...")
+    migration_service = MigrationService()
+    logging.info("✓ MigrationService initialized")
 
     logging.info("Initializing FlowService...")
-    flow_service = FlowService(delta_service)
+    flow_service = FlowService(migration_service)
     logging.info("✓ FlowService initialized")
 
     logging.info("Initializing NotebookService...")
@@ -53,7 +53,7 @@ except ValueError as e:
     logging.error("For Databricks Apps: Ensure DATABRICKS_HTTP_PATH is configured in app.yaml")
     logging.error("For local dev: Set DATABRICKS_TOKEN, DATABRICKS_HOST, and DATABRICKS_HTTP_PATH")
     databricks_client = None
-    delta_service = None
+    migration_service = None
     flow_service = None
     notebook_service = None
     job_deployment_service = None
@@ -62,7 +62,7 @@ except Exception as e:
     import traceback
     logging.error(traceback.format_exc())
     databricks_client = None
-    delta_service = None
+    migration_service = None
     flow_service = None
     notebook_service = None
     job_deployment_service = None
@@ -82,14 +82,14 @@ def dashboard():
 
 @flask_app.route('/api/flows', methods=['GET'])
 def api_list_flows():
-    """Get all flows from Delta table."""
-    if delta_service is None:
+    """Get all flows from migration_flows table."""
+    if migration_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
-        flows = delta_service.list_all_flows()
+        flows = migration_service.list_all_flows()
         flow_dicts = [flow.to_dict() for flow in flows]
-        logging.info(f"Successfully fetched {len(flow_dicts)} flows from Delta table")
+        logging.info(f"Successfully fetched {len(flow_dicts)} flows from migration_flows table")
         return jsonify({
             'success': True,
             'flows': flow_dicts,
@@ -104,31 +104,30 @@ def api_list_flows():
 
 @flask_app.route('/api/debug/connection', methods=['GET'])
 def api_debug_connection():
-    """Debug endpoint to check Delta service connection and configuration."""
-    if delta_service is None:
+    """Debug endpoint to check MigrationService connection and configuration."""
+    if migration_service is None:
         return jsonify({
             'success': False,
-            'error': 'DeltaService not initialized',
+            'error': 'MigrationService not initialized',
             'services_initialized': False
         }), 503
 
     try:
         # Test connection and query
-        flows = delta_service.list_all_flows()
+        flows = migration_service.list_all_flows()
 
         return jsonify({
             'success': True,
             'services_initialized': True,
             'connection_info': {
-                'server_hostname': delta_service.server_hostname,
-                'http_path': delta_service.http_path,
-                'table_name': delta_service.table_name,
-                'auth_method': 'OAuth' if delta_service.use_oauth else 'PAT',
-                'connection_open': delta_service._connection is not None and delta_service._connection.open if delta_service._connection else False
+                'schema': migration_service.schema,
+                'flows_table': migration_service.flows_table,
+                'warehouse_id': getattr(migration_service.cfg, 'warehouse_id', 'NOT_SET'),
+                'connection_open': migration_service._connection is not None and migration_service._connection.open if migration_service._connection else False
             },
             'query_result': {
                 'flows_count': len(flows),
-                'sample_flow_names': [f.flow_name for f in flows[:5]]
+                'sample_flows': [{'flow_id': f.flow_id, 'flow_name': f.flow_name, 'status': f.migration_status} for f in flows[:5]]
             }
         })
     except Exception as e:
@@ -144,18 +143,28 @@ def api_debug_connection():
         }), 500
 
 
-@flask_app.route('/api/flows/<flow_name>', methods=['GET'])
-def api_get_flow(flow_name: str):
-    """Get details for a specific flow with latest status."""
-    if flow_service is None:
+@flask_app.route('/api/flows/<flow_identifier>', methods=['GET'])
+def api_get_flow(flow_identifier: str):
+    """
+    Get details for a specific flow with latest status.
+
+    Args:
+        flow_identifier: Either flow_id (UUID) or flow_name (for backward compat)
+    """
+    if flow_service is None or migration_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
-        # Poll latest status from Databricks if converting
-        flow_dict = flow_service.poll_flow_status(flow_name)
+        # Try to get by flow_id first, then by flow_name
+        flow = migration_service.get_flow(flow_identifier)
+        if not flow:
+            flow = migration_service.get_flow_by_name(flow_identifier)
 
-        if not flow_dict:
+        if not flow:
             return jsonify({'success': False, 'error': 'Flow not found'}), 404
+
+        # Poll latest status from Databricks if running
+        flow_dict = flow_service.poll_flow_status(flow.flow_id)
 
         return jsonify({
             'success': True,
@@ -165,14 +174,27 @@ def api_get_flow(flow_name: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_name>/start', methods=['POST'])
-def api_start_conversion(flow_name: str):
-    """Kick off conversion job for a flow."""
-    if flow_service is None:
+@flask_app.route('/api/flows/<flow_identifier>/start', methods=['POST'])
+def api_start_conversion(flow_identifier: str):
+    """
+    Kick off conversion job for a flow.
+
+    Args:
+        flow_identifier: Either flow_id (UUID) or flow_name (for backward compat)
+    """
+    if flow_service is None or migration_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
-        result = flow_service.start_conversion(flow_name)
+        # Resolve to flow_id
+        flow = migration_service.get_flow(flow_identifier)
+        if not flow:
+            flow = migration_service.get_flow_by_name(flow_identifier)
+
+        if not flow:
+            return jsonify({'success': False, 'error': 'Flow not found'}), 404
+
+        result = flow_service.start_conversion(flow.flow_id)
 
         if not result['success']:
             return jsonify(result), 400
@@ -185,30 +207,47 @@ def api_start_conversion(flow_name: str):
 @flask_app.route('/api/flows/bulk-start', methods=['POST'])
 def api_bulk_start_conversions():
     """Start conversions for multiple flows."""
-    if flow_service is None:
+    if flow_service is None or migration_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
         data = request.json
-        flow_names = data.get('flow_names', [])
+        flow_identifiers = data.get('flow_names', []) or data.get('flow_ids', [])  # Support both for backward compat
 
-        if not flow_names:
-            return jsonify({'success': False, 'error': 'flow_names required'}), 400
+        if not flow_identifiers:
+            return jsonify({'success': False, 'error': 'flow_names or flow_ids required'}), 400
 
-        result = flow_service.start_bulk_conversions(flow_names)
+        # Resolve all identifiers to flow_ids
+        flow_ids = []
+        for identifier in flow_identifiers:
+            flow = migration_service.get_flow(identifier)
+            if not flow:
+                flow = migration_service.get_flow_by_name(identifier)
+            if flow:
+                flow_ids.append(flow.flow_id)
+
+        result = flow_service.start_bulk_conversions(flow_ids)
         return jsonify(result)
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_name>/stop', methods=['POST'])
-def api_stop_conversion(flow_name: str):
+@flask_app.route('/api/flows/<flow_identifier>/stop', methods=['POST'])
+def api_stop_conversion(flow_identifier: str):
     """Cancel a running conversion."""
-    if flow_service is None:
+    if flow_service is None or migration_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
-        result = flow_service.stop_conversion(flow_name)
+        # Resolve to flow_id
+        flow = migration_service.get_flow(flow_identifier)
+        if not flow:
+            flow = migration_service.get_flow_by_name(flow_identifier)
+
+        if not flow:
+            return jsonify({'success': False, 'error': 'Flow not found'}), 404
+
+        result = flow_service.stop_conversion(flow.flow_id)
 
         if not result['success']:
             return jsonify(result), 400
@@ -218,14 +257,22 @@ def api_stop_conversion(flow_name: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_name>/notebooks', methods=['GET'])
-def api_get_notebooks(flow_name: str):
+@flask_app.route('/api/flows/<flow_identifier>/notebooks', methods=['GET'])
+def api_get_notebooks(flow_identifier: str):
     """Get list of generated notebooks for a flow."""
-    if flow_service is None:
+    if flow_service is None or migration_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
-        notebooks = flow_service.get_flow_notebooks(flow_name)
+        # Resolve to flow_id
+        flow = migration_service.get_flow(flow_identifier)
+        if not flow:
+            flow = migration_service.get_flow_by_name(flow_identifier)
+
+        if not flow:
+            return jsonify({'success': False, 'error': 'Flow not found'}), 404
+
+        notebooks = flow_service.get_flow_notebooks(flow.flow_id)
 
         return jsonify({
             'success': True,
@@ -235,21 +282,122 @@ def api_get_notebooks(flow_name: str):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@flask_app.route('/api/flows/<flow_name>/history', methods=['GET'])
-def api_get_flow_history(flow_name: str):
-    """Get conversion history for a flow."""
-    if delta_service is None:
+@flask_app.route('/api/flows/<flow_identifier>/history', methods=['GET'])
+def api_get_flow_history(flow_identifier: str):
+    """Get conversion history for a flow (migration runs)."""
+    if migration_service is None:
         return jsonify({'success': False, 'error': 'Service not initialized. Check if app is running in Databricks environment.'}), 503
 
     try:
+        # Resolve to flow_id
+        flow = migration_service.get_flow(flow_identifier)
+        if not flow:
+            flow = migration_service.get_flow_by_name(flow_identifier)
+
+        if not flow:
+            return jsonify({'success': False, 'error': 'Flow not found'}), 404
+
         limit = request.args.get('limit', default=20, type=int)
-        history = delta_service.get_flow_history(flow_name, limit=limit)
+        runs = migration_service.get_flow_runs(flow.flow_id, limit=limit)
 
         return jsonify({
             'success': True,
-            'flow_name': flow_name,
-            'history': history,
-            'count': len(history)
+            'flow_id': flow.flow_id,
+            'flow_name': flow.flow_name,
+            'history': [run.to_dict() for run in runs],
+            'count': len(runs)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# New granular data routes for Cori's architecture
+
+@flask_app.route('/api/flows/<flow_identifier>/runs/<run_id>/iterations', methods=['GET'])
+def api_get_run_iterations(flow_identifier: str, run_id: str):
+    """Get all iterations for a run (step-by-step progress)."""
+    if migration_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized.'}), 503
+
+    try:
+        iterations = migration_service.get_run_iterations(run_id)
+        return jsonify({
+            'success': True,
+            'run_id': run_id,
+            'iterations': [it.to_dict() for it in iterations],
+            'count': len(iterations)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@flask_app.route('/api/flows/<flow_identifier>/runs/<run_id>/patches', methods=['GET'])
+def api_get_run_patches(flow_identifier: str, run_id: str):
+    """Get all code patches for a run."""
+    if migration_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized.'}), 503
+
+    try:
+        patches = migration_service.get_run_patches(run_id)
+        return jsonify({
+            'success': True,
+            'run_id': run_id,
+            'patches': [p.to_dict() for p in patches],
+            'count': len(patches)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@flask_app.route('/api/flows/<flow_identifier>/runs/<run_id>/sast', methods=['GET'])
+def api_get_run_sast_results(flow_identifier: str, run_id: str):
+    """Get SAST scan results for a run."""
+    if migration_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized.'}), 503
+
+    try:
+        sast_results = migration_service.get_run_sast_results(run_id)
+        return jsonify({
+            'success': True,
+            'run_id': run_id,
+            'sast_results': [sr.to_dict() for sr in sast_results],
+            'count': len(sast_results)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@flask_app.route('/api/flows/<flow_identifier>/runs/<run_id>/exec_results', methods=['GET'])
+def api_get_run_exec_results(flow_identifier: str, run_id: str):
+    """Get job execution results for a run."""
+    if migration_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized.'}), 503
+
+    try:
+        exec_results = migration_service.get_run_exec_results(run_id)
+        return jsonify({
+            'success': True,
+            'run_id': run_id,
+            'exec_results': [er.to_dict() for er in exec_results],
+            'count': len(exec_results)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@flask_app.route('/api/flows/<flow_identifier>/runs/<run_id>/human_requests', methods=['GET'])
+def api_get_run_human_requests(flow_identifier: str, run_id: str):
+    """Get human intervention requests for a run."""
+    if migration_service is None:
+        return jsonify({'success': False, 'error': 'Service not initialized.'}), 503
+
+    try:
+        human_requests = migration_service.get_run_human_requests(run_id)
+        return jsonify({
+            'success': True,
+            'run_id': run_id,
+            'human_requests': [hr.to_dict() for hr in human_requests],
+            'count': len(human_requests)
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

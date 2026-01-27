@@ -1,5 +1,10 @@
 """
 Business logic for NiFi flow conversion operations.
+
+Updated to use new migration_* schema following Cori's architecture:
+  - "The App should never 'compute' progress. It should display the latest rows."
+  - App reads from migration_iterations for progress (not estimated)
+  - Job writes structured data to DB
 """
 
 import os
@@ -9,47 +14,46 @@ from datetime import datetime
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 
-from services.delta_service import DeltaService
+from services.migration_service import MigrationService
 from services.dynamic_job_service import DynamicJobService
 
 
 class FlowService:
     """Handles flow conversion lifecycle and Databricks job orchestration."""
 
-    def __init__(self, delta_service: DeltaService = None):
+    def __init__(self, migration_service: MigrationService = None):
         """
         Initialize flow service.
 
         Args:
-            delta_service: DeltaService instance. If None, will be created.
+            migration_service: MigrationService instance. If None, will be created.
         """
-        self.delta_service = delta_service or DeltaService()
+        self.migration_service = migration_service or MigrationService()
         self.dynamic_job_service = DynamicJobService()
         self.logger = logging.getLogger(__name__)
 
-    def start_conversion(self, flow_name: str) -> dict:
+    def start_conversion(self, flow_id: str) -> dict:
         """
         Kick off conversion for a flow by creating a new Databricks job.
 
         Args:
-            flow_name: Flow identifier
+            flow_id: Flow identifier (UUID from XML)
 
         Returns:
             dict with keys: success (bool), job_id (str), run_id (str),
-                           attempt_id (str), flow_name (str), error (str)
+                           flow_id (str), error (str)
         """
         # Get flow details
-        flow = self.delta_service.get_flow(flow_name)
+        flow = self.migration_service.get_flow(flow_id)
         if not flow:
             return {'success': False, 'error': 'Flow not found'}
 
         # Check if already converting
-        if flow.status == 'CONVERTING':
-            current_attempt = self.delta_service.get_current_attempt(flow_name)
+        if flow.migration_status == 'RUNNING':
             return {
                 'success': False,
                 'error': 'Conversion already in progress',
-                'current_attempt_id': current_attempt.get('attempt_id') if current_attempt else None
+                'current_run_id': flow.current_run_id
             }
 
         # Validate XML path exists
@@ -57,71 +61,84 @@ class FlowService:
             return {'success': False, 'error': 'NiFi XML path not configured for this flow'}
 
         try:
-            # Create attempt record first (to get attempt_id)
-            # Use placeholder job_id until we create the actual job
-            attempt_id = self.delta_service.create_conversion_attempt(
-                flow_name,
-                "PENDING",
-                f"NiFi_Conversion_{flow.flow_name}"
+            # Create run record (to get run_id)
+            run_id = self.migration_service.create_run(flow_id)
+
+            # Update flow status to RUNNING and link to current run
+            self.migration_service.update_flow_status(
+                flow_id,
+                migration_status='RUNNING',
+                current_run_id=run_id
             )
 
             # Create and run the Databricks job
             job_info = self.dynamic_job_service.create_and_run_job(
-                flow_name=flow_name,
+                flow_name=flow.flow_name,
                 nifi_xml_path=flow.nifi_xml_path,
-                attempt_id=attempt_id
+                run_id=run_id  # Pass run_id instead of attempt_id
             )
 
-            # Update attempt with actual job_id and run_id
-            self.delta_service.update_attempt_status(attempt_id, {
-                'databricks_job_id': job_info['job_id'],
-                'databricks_run_id': job_info['run_id'],
-                'job_name': job_info['job_name'],
-                'status': 'RUNNING'
-            })
+            # Update run with actual job_id and set status to QUEUED
+            self.migration_service.update_run_status(
+                run_id,
+                status='QUEUED',
+                job_run_id=job_info['run_id']
+            )
 
-            self.logger.info(f"Started conversion for {flow_name}: job {job_info['job_id']}, run {job_info['run_id']}")
+            # Add initial iteration
+            self.migration_service.add_iteration(
+                run_id=run_id,
+                iteration_num=1,
+                step='job_created',
+                step_status='COMPLETED',
+                summary=f"Databricks job created: {job_info['job_id']}"
+            )
+
+            self.logger.info(f"Started conversion for {flow_id}: job {job_info['job_id']}, run {job_info['run_id']}")
 
             return {
                 'success': True,
                 'job_id': job_info['job_id'],
-                'run_id': job_info['run_id'],
-                'attempt_id': attempt_id,
-                'flow_name': flow_name
+                'databricks_run_id': job_info['run_id'],
+                'run_id': run_id,
+                'flow_id': flow_id
             }
 
         except Exception as e:
-            self.logger.error(f"Failed to start conversion for {flow_name}: {e}")
+            self.logger.error(f"Failed to start conversion for {flow_id}: {e}")
 
-            # Mark attempt as failed if it was created
-            if 'attempt_id' in locals():
-                self.delta_service.update_attempt_status(attempt_id, {
-                    'status': 'FAILED',
-                    'error_message': str(e),
-                    'completed_at': datetime.now().isoformat()
-                })
+            # Mark run as failed if it was created
+            if 'run_id' in locals():
+                self.migration_service.update_run_status(
+                    run_id,
+                    status='FAILED'
+                )
+                self.migration_service.add_iteration(
+                    run_id=run_id,
+                    iteration_num=1,
+                    step='job_creation',
+                    step_status='FAILED',
+                    error=str(e)
+                )
 
             # Update flow status
-            self.delta_service.update_flow_status(flow_name, {
-                'status': 'NEEDS_ATTENTION',
-                'error_message': str(e)
-            })
+            self.migration_service.update_flow_status(flow_id, 'NEEDS_HUMAN')
 
-            return {'success': False, 'error': str(e), 'attempt_id': attempt_id if 'attempt_id' in locals() else None}
+            return {'success': False, 'error': str(e), 'run_id': run_id if 'run_id' in locals() else None}
 
-    def start_bulk_conversions(self, flow_names: List[str]) -> dict:
+    def start_bulk_conversions(self, flow_ids: List[str]) -> dict:
         """
         Start conversions for multiple flows.
 
         Args:
-            flow_names: List of flow identifiers
+            flow_ids: List of flow identifiers
 
         Returns:
             dict with results for each flow
         """
         results = []
-        for flow_name in flow_names:
-            result = self.start_conversion(flow_name)
+        for flow_id in flow_ids:
+            result = self.start_conversion(flow_id)
             results.append(result)
 
         return {
@@ -131,149 +148,177 @@ class FlowService:
             'failed': len([r for r in results if not r['success']])
         }
 
-    def poll_flow_status(self, flow_name: str) -> dict:
+    def poll_flow_status(self, flow_id: str) -> dict:
         """
-        Poll Databricks for current status and update history table.
+        Poll Databricks for current job state and read progress from DB.
+
+        IMPORTANT: Following Cori's principle - "App never computes progress."
+        Progress comes from migration_iterations table, not time-based estimates.
 
         Args:
-            flow_name: Flow identifier
+            flow_id: Flow identifier (UUID)
 
         Returns:
-            Updated flow as dictionary
+            Updated flow with progress from DB
         """
-        flow = self.delta_service.get_flow(flow_name)
+        flow = self.migration_service.get_flow(flow_id)
         if not flow:
             return {}
 
-        # Get current attempt
-        current_attempt = self.delta_service.get_current_attempt(flow_name)
-        if not current_attempt or not current_attempt.get('databricks_run_id'):
+        # Get current run
+        if not flow.current_run_id:
+            return flow.to_dict()
+
+        run = self.migration_service.get_run(flow.current_run_id)
+        if not run or not run.job_run_id:
             return flow.to_dict()
 
         # If already terminal, return cached
-        if current_attempt['status'] in ['SUCCESS', 'FAILED', 'CANCELLED']:
-            return flow.to_dict()
+        if run.status in ['SUCCESS', 'FAILED', 'CANCELLED']:
+            # Get latest iteration for progress info
+            latest_iteration = self.migration_service.get_latest_iteration(run.run_id)
+            result = flow.to_dict()
+            if latest_iteration:
+                result['current_step'] = latest_iteration.step
+                result['current_summary'] = latest_iteration.summary
+                result['current_iteration'] = latest_iteration.iteration_num
+            return result
 
-        # Poll Databricks
+        # Poll Databricks for job state (NOT progress)
         w = WorkspaceClient()
         try:
-            run = w.jobs.get_run(run_id=int(current_attempt['databricks_run_id']))
-            db_state = run.state.life_cycle_state.value
-
-            updates = {}
+            db_run = w.jobs.get_run(run_id=int(run.job_run_id))
+            db_state = db_run.state.life_cycle_state.value
 
             if db_state in ['PENDING', 'RUNNING', 'TERMINATING']:
-                # Estimate progress based on elapsed time
-                if run.start_time:
-                    elapsed_min = (datetime.now().timestamp() * 1000 - run.start_time) / 1000 / 60
-                    # Rough estimate: 10% per minute, cap at 90%
-                    updates['progress_percentage'] = min(int(elapsed_min * 10), 90)
-                updates['status_message'] = f'Job {db_state.lower()}'
+                # Update run status if changed
+                if db_state == 'RUNNING' and run.status != 'RUNNING':
+                    self.migration_service.update_run_status(run.run_id, status='RUNNING')
+                    self.migration_service.update_flow_status(flow_id, migration_status='RUNNING')
 
             elif db_state == 'TERMINATED':
-                result_state = run.state.result_state.value if run.state.result_state else 'UNKNOWN'
+                result_state = db_run.state.result_state.value if db_run.state.result_state else 'UNKNOWN'
 
                 if result_state == 'SUCCESS':
-                    updates['status'] = 'SUCCESS'
-                    updates['progress_percentage'] = 100
-                    updates['completed_at'] = datetime.now().isoformat()
-                    updates['status_message'] = 'Conversion completed'
-
-                    # Update flow status
-                    self.delta_service.update_flow_status(flow_name, {
-                        'status': 'DONE',
-                        'successful_conversions': (flow.successful_conversions or 0) + 1
-                    })
+                    self.migration_service.update_run_status(
+                        run.run_id,
+                        status='SUCCESS',
+                        end_ts=datetime.now()
+                    )
+                    self.migration_service.update_flow_status(flow_id, migration_status='DONE')
 
                 elif result_state == 'FAILED':
-                    updates['status'] = 'FAILED'
-                    updates['error_message'] = run.state.state_message or 'Job failed'
-                    updates['completed_at'] = datetime.now().isoformat()
+                    error_msg = db_run.state.state_message or 'Job failed'
+                    self.migration_service.update_run_status(
+                        run.run_id,
+                        status='FAILED',
+                        end_ts=datetime.now()
+                    )
+                    self.migration_service.update_flow_status(flow_id, migration_status='NEEDS_HUMAN')
 
-                    # Update flow status
-                    self.delta_service.update_flow_status(flow_name, {
-                        'status': 'NEEDS_ATTENTION'
-                    })
+                    # Add failure iteration
+                    latest = self.migration_service.get_latest_iteration(run.run_id)
+                    next_iter = (latest.iteration_num + 1) if latest else 1
+                    self.migration_service.add_iteration(
+                        run_id=run.run_id,
+                        iteration_num=next_iter,
+                        step='job_termination',
+                        step_status='FAILED',
+                        error=error_msg
+                    )
 
                 else:
                     # CANCELED or other terminal states
-                    updates['status'] = 'CANCELLED'
-                    updates['completed_at'] = datetime.now().isoformat()
+                    self.migration_service.update_run_status(
+                        run.run_id,
+                        status='CANCELLED',
+                        end_ts=datetime.now()
+                    )
+                    self.migration_service.update_flow_status(flow_id, migration_status='STOPPED')
 
-                    # Update flow status
-                    self.delta_service.update_flow_status(flow_name, {
-                        'status': 'NEEDS_ATTENTION'
-                    })
+            # Read progress from DB (NOT computed)
+            latest_iteration = self.migration_service.get_latest_iteration(run.run_id)
+            result = flow.to_dict()
 
-            # Apply updates to history if any
-            if updates:
-                self.delta_service.update_attempt_status(current_attempt['attempt_id'], updates)
+            if latest_iteration:
+                result['current_step'] = latest_iteration.step
+                result['current_summary'] = latest_iteration.summary
+                result['current_iteration'] = latest_iteration.iteration_num
+                result['step_status'] = latest_iteration.step_status
+                if latest_iteration.error:
+                    result['error'] = latest_iteration.error
 
-            # Return updated flow
-            return self.delta_service.get_flow(flow_name).to_dict()
+            return result
 
         except Exception as e:
-            self.logger.error(f"Failed to poll status for {flow_name}: {e}")
-            self.delta_service.update_attempt_status(current_attempt['attempt_id'], {
-                'status': 'FAILED',
-                'error_message': f'Polling failed: {str(e)}',
-                'completed_at': datetime.now().isoformat()
-            })
-            self.delta_service.update_flow_status(flow_name, {
-                'status': 'NEEDS_ATTENTION',
-                'error_message': f'Polling failed: {str(e)}'
-            })
+            self.logger.error(f"Failed to poll status for {flow_id}: {e}")
+            self.migration_service.update_run_status(run.run_id, status='FAILED', end_ts=datetime.now())
+            self.migration_service.update_flow_status(flow_id, migration_status='NEEDS_HUMAN')
             return flow.to_dict()
 
-    def stop_conversion(self, flow_name: str) -> dict:
+    def stop_conversion(self, flow_id: str) -> dict:
         """
         Cancel a running conversion.
 
         Args:
-            flow_name: Flow identifier
+            flow_id: Flow identifier
 
         Returns:
             dict with success status
         """
-        # Get current attempt
-        current_attempt = self.delta_service.get_current_attempt(flow_name)
-        if not current_attempt or not current_attempt.get('databricks_run_id'):
+        # Get flow and current run
+        flow = self.migration_service.get_flow(flow_id)
+        if not flow or not flow.current_run_id:
+            return {'success': False, 'error': 'No running job found'}
+
+        run = self.migration_service.get_run(flow.current_run_id)
+        if not run or not run.job_run_id:
             return {'success': False, 'error': 'No running job found'}
 
         try:
             w = WorkspaceClient()
-            w.jobs.cancel_run(run_id=int(current_attempt['databricks_run_id']))
+            w.jobs.cancel_run(run_id=int(run.job_run_id))
 
-            # Update attempt status
-            self.delta_service.update_attempt_status(current_attempt['attempt_id'], {
-                'status': 'CANCELLED',
-                'status_message': 'Cancelled by user',
-                'completed_at': datetime.now().isoformat()
-            })
+            # Update run status
+            self.migration_service.update_run_status(
+                run.run_id,
+                status='CANCELLED',
+                end_ts=datetime.now()
+            )
+
+            # Add cancellation iteration
+            latest = self.migration_service.get_latest_iteration(run.run_id)
+            next_iter = (latest.iteration_num + 1) if latest else 1
+            self.migration_service.add_iteration(
+                run_id=run.run_id,
+                iteration_num=next_iter,
+                step='user_cancellation',
+                step_status='COMPLETED',
+                summary='Cancelled by user'
+            )
 
             # Update flow status
-            self.delta_service.update_flow_status(flow_name, {
-                'status': 'NEEDS_ATTENTION',
-                'status_message': 'Cancelled by user'
-            })
+            self.migration_service.update_flow_status(flow_id, migration_status='STOPPED')
 
             return {'success': True}
         except Exception as e:
-            self.logger.error(f"Failed to cancel conversion for {flow_name}: {e}")
+            self.logger.error(f"Failed to cancel conversion for {flow_id}: {e}")
             return {'success': False, 'error': str(e)}
 
-    def get_flow_notebooks(self, flow_name: str) -> List[str]:
+    def get_flow_notebooks(self, flow_id: str) -> List[str]:
         """
         Get list of generated notebooks for a flow.
 
         Args:
-            flow_name: Flow identifier
+            flow_id: Flow identifier
 
         Returns:
-            List of notebook paths
+            List of notebook paths from patches table
         """
-        flow = self.delta_service.get_flow(flow_name)
-        if not flow:
+        flow = self.migration_service.get_flow(flow_id)
+        if not flow or not flow.current_run_id:
             return []
 
-        return flow.generated_notebooks or []
+        # Get patches (generated notebooks) from current run
+        patches = self.migration_service.get_run_patches(flow.current_run_id)
+        return [patch.artifact_ref for patch in patches]
