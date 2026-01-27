@@ -359,9 +359,9 @@
                     <th>Server</th>
                     <th>Owner</th>
                     <th>Status</th>
-                    <th>Progress</th>
-                    <th>Iterations</th>
-                    <th>Validation %</th>
+                    <th>Current Step</th>
+                    <th>Iteration</th>
+                    <th>Step Status</th>
                     <th>Last Updated</th>
                     <th>Actions</th>
                 </tr>
@@ -426,27 +426,30 @@ function renderFlowTable() {
 
     let html = '';
     flows.forEach(flow => {
-        const statusBadge = getStatusBadge(flow.status);
-        const progressBar = getProgressBar(flow.progress_percentage);
-        const isConverting = flow.status === 'CONVERTING';
-        const canStart = flow.status === 'NOT_STARTED' || flow.status === 'NEEDS_ATTENTION';
+        const statusBadge = getStatusBadge(flow.migration_status);
+        const isRunning = flow.migration_status === 'RUNNING';
+        const canStart = ['NOT_STARTED', 'NEEDS_HUMAN', 'NEEDS_ATTENTION', 'FAILED', 'STOPPED'].includes(flow.migration_status);
+
+        // Display current step/summary from iterations table (NOT computed progress)
+        const currentProgress = flow.current_summary || flow.current_step || 'Waiting to start';
+        const currentIteration = flow.current_iteration || 0;
 
         html += `
-            <tr class="flow-row ${isConverting ? 'converting' : ''}" data-flow-id="${flow.flow_name}">
+            <tr class="flow-row ${isRunning ? 'converting' : ''}" data-flow-id="${flow.flow_name}">
                 <td><input type="checkbox" class="flow-checkbox" value="${flow.flow_name}"
                     ${canStart ? '' : 'disabled'} onchange="updateBulkButton()"></td>
                 <td><a href="#" onclick="showFlowDetails('${flow.flow_name}'); return false;">${escapeHtml(flow.flow_name)}</a></td>
                 <td>${escapeHtml(flow.server || 'N/A')}</td>
                 <td>${escapeHtml(flow.owner || 'N/A')}</td>
                 <td>${statusBadge}</td>
-                <td>${progressBar}</td>
-                <td>${flow.iterations || 0}</td>
-                <td>${flow.validation_percentage || 0}%</td>
-                <td>${formatTimestamp(flow.last_updated)}</td>
+                <td>${escapeHtml(currentProgress)}</td>
+                <td>${currentIteration}</td>
+                <td>${escapeHtml(flow.step_status || '-')}</td>
+                <td>${formatTimestamp(flow.last_update_ts || flow.last_updated)}</td>
                 <td>
                     ${canStart ?
                         `<button class="btn btn-sm btn-primary" onclick="startFlow('${flow.flow_name}')">Start</button>` :
-                        isConverting ?
+                        isRunning ?
                         `<button class="btn btn-sm btn-secondary" onclick="stopFlow('${flow.flow_name}')">Stop</button>` :
                         `<button class="btn btn-sm btn-secondary" onclick="showFlowDetails('${flow.flow_name}')">View</button>`
                     }
@@ -461,10 +464,10 @@ function renderFlowTable() {
 function updateStats() {
     const stats = {
         total: flows.length,
-        not_started: flows.filter(f => f.status === 'NOT_STARTED').length,
-        converting: flows.filter(f => f.status === 'CONVERTING').length,
-        done: flows.filter(f => f.status === 'DONE').length,
-        needs_attention: flows.filter(f => f.status === 'NEEDS_ATTENTION').length
+        not_started: flows.filter(f => f.migration_status === 'NOT_STARTED').length,
+        converting: flows.filter(f => f.migration_status === 'RUNNING').length,
+        done: flows.filter(f => f.migration_status === 'DONE').length,
+        needs_attention: flows.filter(f => f.migration_status === 'NEEDS_HUMAN' || f.migration_status === 'NEEDS_ATTENTION').length
     };
 
     const statsContainer = document.getElementById('statsContainer');
@@ -495,9 +498,14 @@ function updateStats() {
 function getStatusBadge(status) {
     const badges = {
         'NOT_STARTED': '<span class="badge badge-gray">Not Started</span>',
-        'CONVERTING': '<span class="badge badge-blue">Converting</span>',
+        'RUNNING': '<span class="badge badge-blue">Running</span>',
         'DONE': '<span class="badge badge-green">Done</span>',
-        'NEEDS_ATTENTION': '<span class="badge badge-red">Needs Attention</span>'
+        'NEEDS_HUMAN': '<span class="badge badge-red">Needs Human</span>',
+        'FAILED': '<span class="badge badge-red">Failed</span>',
+        'STOPPED': '<span class="badge badge-yellow">Stopped</span>',
+        // Legacy statuses (backward compat)
+        'CONVERTING': '<span class="badge badge-blue">Running</span>',
+        'NEEDS_ATTENTION': '<span class="badge badge-red">Needs Human</span>'
     };
     return badges[status] || '<span class="badge badge-gray">Unknown</span>';
 }
@@ -631,12 +639,13 @@ async function showFlowDetails(flowId) {
                     <p><strong>XML Path:</strong> ${escapeHtml(flow.nifi_xml_path || 'N/A')}</p>
 
                     <h4>Conversion Status</h4>
-                    <p><strong>Status:</strong> ${getStatusBadge(flow.status)}</p>
-                    <p><strong>Progress:</strong> ${flow.progress_percentage}%</p>
-                    <p><strong>Message:</strong> ${escapeHtml(flow.status_message || 'N/A')}</p>
-                    ${flow.error_message ? `<p class="error-message"><strong>Error:</strong> ${escapeHtml(flow.error_message)}</p>` : ''}
-                    ${flow.databricks_run_id ?
-                        `<p><strong>Databricks Run ID:</strong> ${escapeHtml(flow.databricks_run_id)}</p>` :
+                    <p><strong>Status:</strong> ${getStatusBadge(flow.migration_status)}</p>
+                    <p><strong>Current Step:</strong> ${escapeHtml(flow.current_step || 'N/A')}</p>
+                    <p><strong>Summary:</strong> ${escapeHtml(flow.current_summary || 'N/A')}</p>
+                    <p><strong>Iteration:</strong> ${flow.current_iteration || 0}</p>
+                    ${flow.error ? `<p class="error-message"><strong>Error:</strong> ${escapeHtml(flow.error)}</p>` : ''}
+                    ${flow.current_run_id ?
+                        `<p><strong>Current Run ID:</strong> ${escapeHtml(flow.current_run_id)}</p>` :
                         ''
                     }
                     ${flow.conversion_started_at ?
@@ -752,9 +761,9 @@ function filterFlows() {
 
 function startAutoRefresh() {
     refreshInterval = setInterval(() => {
-        // Only refresh if there are converting flows
-        const hasConverting = flows.some(f => f.status === 'CONVERTING');
-        if (hasConverting) {
+        // Only refresh if there are running flows
+        const hasRunning = flows.some(f => f.migration_status === 'RUNNING');
+        if (hasRunning) {
             loadFlows();
         }
     }, 5000); // Refresh every 5 seconds
