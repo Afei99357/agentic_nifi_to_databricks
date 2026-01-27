@@ -1,299 +1,608 @@
 # Databricks notebook source
 """
-Dummy NiFi Conversion Agent Notebook (Testing)
+NiFi Conversion Agent Notebook (Intent-Based Architecture)
 
-This is a placeholder notebook that simulates the NiFi-to-Databricks conversion process.
-Used for testing dynamic job creation and history tracking before the real MLflow agent is ready.
+This notebook converts NiFi flows to Databricks notebooks with intent-based folder structure.
+It parses NiFi XML to extract processors, categorizes them by intent (ingestion, transformation,
+routing, output, etc.), and generates test notebooks organized by intent.
+
+Updated to use new migration_* schema following Cori's architecture:
+  - "The App should never 'compute' progress. It should display the latest rows."
+  - Agent writes progress to migration_iterations table (not direct SQL to old table)
+  - Structured output with patches, iterations, and execution results
 
 Expected Parameters:
-  - flow_id: Flow identifier
+  - run_id: Migration run identifier (format: "{flow_id}_run_{timestamp}")
+  - flow_id: Flow UUID from XML <rootGroup id="...">
+  - flow_name: Flow name (for display/folder name)
   - nifi_xml_path: Path to NiFi XML file in Unity Catalog volume
   - output_path: Where to save generated notebooks
-  - attempt_id: Unique attempt identifier for history tracking
-  - delta_table: History table name (e.g., "main.default.nifi_conversion_history")
+  - catalog: Catalog name for migration tables (default: eliao)
+  - schema: Schema name for migration tables (default: nifi_to_databricks)
 """
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Get Parameters
+# MAGIC ## Setup and Get Parameters
 
 # COMMAND ----------
 
 # Get job parameters
+dbutils.widgets.text("run_id", "", "Run ID")
 dbutils.widgets.text("flow_id", "", "Flow ID")
+dbutils.widgets.text("flow_name", "", "Flow Name")
 dbutils.widgets.text("nifi_xml_path", "", "NiFi XML Path")
 dbutils.widgets.text("output_path", "", "Output Path")
-dbutils.widgets.text("attempt_id", "", "Attempt ID")
-dbutils.widgets.text("delta_table", "main.default.nifi_conversion_history", "Delta Table")
+dbutils.widgets.text("catalog", "eliao", "Catalog")
+dbutils.widgets.text("schema", "nifi_to_databricks", "Schema")
+dbutils.widgets.text("iteration_num", "1", "Iteration Number")
+dbutils.widgets.text("logs_path", "", "Logs Path (for iteration 2+)")
+dbutils.widgets.text("previous_notebooks", "", "Previous Notebooks (comma-separated)")
 
+run_id = dbutils.widgets.get("run_id")
 flow_id = dbutils.widgets.get("flow_id")
+flow_name = dbutils.widgets.get("flow_name")
 nifi_xml_path = dbutils.widgets.get("nifi_xml_path")
 output_path = dbutils.widgets.get("output_path")
-attempt_id = dbutils.widgets.get("attempt_id")
-delta_table = dbutils.widgets.get("delta_table")
+catalog = dbutils.widgets.get("catalog")
+schema = dbutils.widgets.get("schema")
+iteration_num = int(dbutils.widgets.get("iteration_num") or "1")
+logs_path = dbutils.widgets.get("logs_path") or None
+previous_notebooks_str = dbutils.widgets.get("previous_notebooks") or ""
+previous_notebooks = [nb.strip() for nb in previous_notebooks_str.split(",") if nb.strip()]
 
 print("=" * 60)
-print("Dummy NiFi Conversion Agent Starting")
+print("NiFi Conversion Agent Starting")
 print("=" * 60)
+print(f"Run ID: {run_id}")
 print(f"Flow ID: {flow_id}")
+print(f"Flow Name: {flow_name}")
+print(f"Iteration: {iteration_num}")
+print(f"Mode: {'GENERATION' if iteration_num == 1 else 'ERROR FIXING'}")
+if logs_path:
+    print(f"Logs Path: {logs_path}")
+if previous_notebooks:
+    print(f"Previous Notebooks: {len(previous_notebooks)} to fix")
 print(f"NiFi XML Path: {nifi_xml_path}")
 print(f"Output Path: {output_path}")
-print(f"Attempt ID: {attempt_id}")
-print(f"Delta Table: {delta_table}")
+print(f"Catalog: {catalog}")
+print(f"Schema: {schema}")
 print("=" * 60)
 
 # Validate required parameters
-if not flow_id or not nifi_xml_path or not output_path or not attempt_id:
-    raise ValueError("Missing required parameters. All of flow_id, nifi_xml_path, output_path, and attempt_id are required.")
+if not run_id or not flow_id or not flow_name:
+    raise ValueError("Missing required parameters: run_id, flow_id, and flow_name are required.")
+
+# For iteration 1, need nifi_xml_path
+if iteration_num == 1 and not nifi_xml_path:
+    raise ValueError("nifi_xml_path is required for iteration 1 (generation)")
+
+# For iteration 2+, need logs_path
+if iteration_num > 1 and not logs_path:
+    raise ValueError("logs_path is required for iteration 2+ (error fixing)")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Validate XML File Exists
+# MAGIC ## Helper Functions
 
 # COMMAND ----------
 
+import os
 from databricks.sdk import WorkspaceClient
-import time
+from databricks.sdk.service.sql import StatementState, ExecuteStatementRequest
 
 w = WorkspaceClient()
 
-print(f"\n[Step 1/5] Validating XML file exists: {nifi_xml_path}")
-try:
-    # Try to download file to verify it exists
-    file_content = w.files.download(nifi_xml_path).contents.read()
-    file_size = len(file_content)
-    print(f"✅ XML file exists ({file_size:,} bytes)")
+# Processor intent mapping (categorize NiFi processors)
+INTENT_MAPPING = {
+    # Ingestion processors (source data)
+    'GetFile': 'ingestion',
+    'GetHTTP': 'ingestion',
+    'GetSFTP': 'ingestion',
+    'GetFTP': 'ingestion',
+    'GetDatabase': 'ingestion',
+    'ConsumeKafka': 'ingestion',
+    'ConsumeKafka_2_0': 'ingestion',
+    'ListS3': 'ingestion',
+    'FetchS3Object': 'ingestion',
+    'GetJMSQueue': 'ingestion',
 
-    # Update history: RUNNING status
-    spark.sql(f"""
-        UPDATE {delta_table}
-        SET
-            status = 'RUNNING',
-            progress_percentage = 10,
-            status_message = 'Validated XML file exists'
-        WHERE attempt_id = '{attempt_id}'
-    """)
+    # Transformation processors
+    'UpdateAttribute': 'transformation',
+    'ExecuteStreamCommand': 'transformation',
+    'ExecuteScript': 'transformation',
+    'ExecuteProcess': 'transformation',
+    'JoltTransformJSON': 'transformation',
+    'ConvertRecord': 'transformation',
+    'ConvertJSONToSQL': 'transformation',
+    'ReplaceText': 'transformation',
+    'ModifyBytes': 'transformation',
+    'SplitText': 'transformation',
+    'MergeContent': 'transformation',
 
-except Exception as e:
-    print(f"❌ XML file not found or not accessible: {e}")
-    # Update history: FAILED
-    error_msg = str(e).replace("'", "''")
-    spark.sql(f"""
-        UPDATE {delta_table}
-        SET
-            status = 'FAILED',
-            error_message = 'XML file not found: {error_msg}',
-            completed_at = current_timestamp()
-        WHERE attempt_id = '{attempt_id}'
-    """)
-    dbutils.notebook.exit(f"FAILED: XML file not found - {e}")
+    # Routing processors
+    'RouteOnAttribute': 'routing',
+    'RouteOnContent': 'routing',
+    'DistributeLoad': 'routing',
+    'RouteText': 'routing',
 
-# COMMAND ----------
+    # Flow control
+    'ControlRate': 'flow_control',
+    'Wait': 'flow_control',
+    'Notify': 'flow_control',
+    'MonitorActivity': 'flow_control',
 
-# MAGIC %md
-# MAGIC ## Simulate XML Parsing
+    # Output processors (write data)
+    'PutFile': 'output',
+    'PutHDFS': 'output',
+    'PutS3Object': 'output',
+    'PutDatabase': 'output',
+    'PutDatabaseRecord': 'output',
+    'PutKafka': 'output',
+    'PutEmail': 'output',
+    'PutFTP': 'output',
+    'PutSFTP': 'output',
 
-# COMMAND ----------
+    # Monitoring/debugging
+    'LogMessage': 'monitoring',
+    'LogAttribute': 'monitoring'
+}
 
-print(f"\n[Step 2/5] Parsing NiFi XML (simulated)")
-time.sleep(5)  # Simulate parsing time
+def categorize_processor(processor_type: str) -> str:
+    """
+    Categorize processor by type.
 
-print("✅ Parsed NiFi flow definition")
-print("  - Found 12 processors (simulated)")
-print("  - Found 8 connections (simulated)")
-print("  - Found 3 controller services (simulated)")
+    Args:
+        processor_type: Full class name like 'org.apache.nifi.processors.standard.RouteOnAttribute'
 
-# Update progress
-spark.sql(f"""
-    UPDATE {delta_table}
-    SET
-        progress_percentage = 25,
-        iterations = 1,
-        status_message = 'Parsed NiFi XML successfully'
-    WHERE attempt_id = '{attempt_id}'
-""")
+    Returns:
+        Intent category: 'ingestion', 'transformation', 'routing', 'output', etc.
+        Returns 'other' if not recognized.
+    """
+    class_name = processor_type.split('.')[-1]  # Extract 'RouteOnAttribute'
+    return INTENT_MAPPING.get(class_name, 'other')
 
-# COMMAND ----------
+def add_iteration(iteration_num: int, step: str, step_status: str, summary: str, error: str = None):
+    """Write iteration to migration_iterations table."""
+    error_sql = f"'{error.replace(chr(39), chr(39)*2)}'" if error else 'NULL'
+    summary_sql = f"'{summary.replace(chr(39), chr(39)*2)}'" if summary else 'NULL'
 
-# MAGIC %md
-# MAGIC ## Simulate Agent Conversion
+    sql = f"""
+        INSERT INTO {catalog}.{schema}.migration_iterations
+        (run_id, iteration_num, step, step_status, ts, summary, error)
+        VALUES (
+            '{run_id}',
+            {iteration_num},
+            '{step}',
+            '{step_status}',
+            current_timestamp(),
+            {summary_sql},
+            {error_sql}
+        )
+    """
 
-# COMMAND ----------
-
-print(f"\n[Step 3/5] Converting NiFi flow to Databricks notebooks (simulated)")
-
-# Simulate multiple iterations
-iterations = 3
-for i in range(1, iterations + 1):
-    print(f"\n  Iteration {i}/{iterations}:")
-    print(f"    - Analyzing processor dependencies...")
-    time.sleep(3)
-    print(f"    - Generating PySpark code...")
-    time.sleep(3)
-    print(f"    - Validating generated code...")
-    time.sleep(2)
-
-    progress = 25 + (i * 20)
-    validation = min(i * 30, 90)
-
-    spark.sql(f"""
-        UPDATE {delta_table}
-        SET
-            progress_percentage = {progress},
-            iterations = {i},
-            validation_percentage = {validation},
-            status_message = 'Iteration {i}/{iterations} completed'
-        WHERE attempt_id = '{attempt_id}'
-    """)
-
-print(f"\n✅ Conversion iterations complete")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Generate Dummy Output Notebooks
-
-# COMMAND ----------
-
-print(f"\n[Step 4/5] Generating output notebooks")
-
-# Create output directory if it doesn't exist
-try:
-    w.files.create_directory(output_path)
-    print(f"✅ Created output directory: {output_path}")
-except Exception as e:
-    print(f"  Note: Directory may already exist: {e}")
-
-# Generate dummy notebook files
-generated_notebooks = []
-
-notebook_templates = [
-    {
-        "name": f"{flow_id}_ingestion.py",
-        "content": f"""# Databricks notebook source
-# DUMMY NOTEBOOK - Generated by test agent
-# Flow: {flow_id}
-# Purpose: Data Ingestion
-
-from pyspark.sql import SparkSession
-
-# This is a placeholder notebook
-print("Ingestion logic would go here")
-"""
-    },
-    {
-        "name": f"{flow_id}_transformation.py",
-        "content": f"""# Databricks notebook source
-# DUMMY NOTEBOOK - Generated by test agent
-# Flow: {flow_id}
-# Purpose: Data Transformation
-
-from pyspark.sql.functions import col, when
-
-# This is a placeholder notebook
-print("Transformation logic would go here")
-"""
-    },
-    {
-        "name": f"{flow_id}_output.py",
-        "content": f"""# Databricks notebook source
-# DUMMY NOTEBOOK - Generated by test agent
-# Flow: {flow_id}
-# Purpose: Data Output
-
-# This is a placeholder notebook
-print("Output logic would go here")
-"""
-    }
-]
-
-for notebook in notebook_templates:
-    notebook_path = f"{output_path}/{notebook['name']}"
     try:
-        # Upload notebook content
-        w.files.upload(notebook_path, notebook['content'].encode('utf-8'), overwrite=True)
-        generated_notebooks.append(notebook_path)
-        print(f"  ✅ Created: {notebook_path}")
+        spark.sql(sql)
     except Exception as e:
-        print(f"  ⚠️ Warning: Could not create {notebook_path}: {e}")
+        print(f"Warning: Could not write iteration to DB: {e}")
 
-print(f"\n✅ Generated {len(generated_notebooks)} notebooks")
+def add_patch(iteration_num: int, artifact_ref: str, patch_summary: str):
+    """Write patch (generated notebook) to migration_patches table."""
+    summary_sql = f"'{patch_summary.replace(chr(39), chr(39)*2)}'" if patch_summary else 'NULL'
 
-# Update progress
-spark.sql(f"""
-    UPDATE {delta_table}
-    SET
-        progress_percentage = 90,
-        status_message = 'Generated output notebooks'
-    WHERE attempt_id = '{attempt_id}'
-""")
+    sql = f"""
+        INSERT INTO {catalog}.{schema}.migration_patches
+        (run_id, iteration_num, artifact_ref, patch_summary, ts)
+        VALUES (
+            '{run_id}',
+            {iteration_num},
+            '{artifact_ref}',
+            {summary_sql},
+            current_timestamp()
+        )
+    """
 
-time.sleep(2)
+    try:
+        spark.sql(sql)
+    except Exception as e:
+        print(f"Warning: Could not write patch to DB: {e}")
+
+def generate_test_notebook(flow_name: str, processor_name: str, processor_type: str, intent: str) -> str:
+    """
+    Generate a simple test notebook that prints flow and processor info.
+
+    This is for testing purposes - real agent will generate actual conversion code.
+    """
+    safe_proc_name = processor_name.replace("-", "_").replace(" ", "_")
+
+    return f'''# Databricks notebook source
+"""
+Generated Test Notebook
+Flow: {flow_name}
+Processor: {processor_name}
+Type: {processor_type}
+Intent: {intent}
+
+This is a test notebook generated by the dummy agent.
+Real implementation will contain actual NiFi processor conversion logic.
+"""
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Finalize and Mark Complete
+def process_{safe_proc_name}():
+    """
+    Test function for {processor_name} processor.
+    """
+    print("=" * 60)
+    print(f"Flow Name: {flow_name}")
+    print(f"Processor: {processor_name}")
+    print(f"Type: {processor_type}")
+    print(f"Intent Category: {intent}")
+    print("=" * 60)
+    print()
+    print("✅ Test notebook executed successfully")
+    print("📝 Real implementation will process data here")
+    return True
 
 # COMMAND ----------
 
-print(f"\n[Step 5/5] Finalizing conversion")
-
-# Prepare generated notebooks array for SQL
-if generated_notebooks:
-    notebooks_array = "ARRAY(" + ", ".join([f"'{nb}'" for nb in generated_notebooks]) + ")"
-else:
-    notebooks_array = "ARRAY()"
-
-# Mark conversion as complete
-spark.sql(f"""
-    UPDATE {delta_table}
-    SET
-        status = 'SUCCESS',
-        progress_percentage = 100,
-        validation_percentage = 100,
-        completed_at = current_timestamp(),
-        generated_notebooks = {notebooks_array},
-        status_message = 'Conversion completed successfully (dummy agent)'
-    WHERE attempt_id = '{attempt_id}'
-""")
-
-print("=" * 60)
-print("✅ DUMMY CONVERSION COMPLETE")
-print("=" * 60)
-print(f"Attempt ID: {attempt_id}")
-print(f"Generated Notebooks: {len(generated_notebooks)}")
-for nb in generated_notebooks:
-    print(f"  - {nb}")
-print("=" * 60)
-print("\n⚠️ NOTE: This was a SIMULATED conversion using dummy agent")
-print("Real conversions will use the MLflow agent application")
-print("=" * 60)
-
-# Exit successfully
-dbutils.notebook.exit(f"SUCCESS: Generated {len(generated_notebooks)} notebooks for {flow_id}")
+# Execute the processor function
+result = process_{safe_proc_name}()
+print(f"Result: {{result}}")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Summary
+# MAGIC
+# MAGIC This notebook represents the conversion of NiFi processor **{processor_name}** to Databricks.
+# MAGIC
+# MAGIC **Next Steps for Real Implementation:**
+# MAGIC - Parse processor configuration from XML
+# MAGIC - Convert NiFi properties to PySpark code
+# MAGIC - Handle input/output connections
+# MAGIC - Implement error handling and validation
+'''
+
+def create_intent_folders(base_output_path: str, flow_name: str, intents: list) -> dict:
+    """
+    Create folder structure based on processor intents.
+
+    Args:
+        base_output_path: Base UC volume path
+        flow_name: Flow name (creates subfolder)
+        intents: List of unique intent categories found in flow
+
+    Returns:
+        dict mapping intent -> folder path
+    """
+    flow_path = f"{base_output_path}/{flow_name}"
+
+    # Create flow root folder
+    try:
+        w.files.create_directory(flow_path)
+        print(f"✅ Created flow folder: {flow_path}")
+    except Exception as e:
+        print(f"  Note: Flow folder may exist: {e}")
+
+    # Create intent subfolders
+    intent_paths = {}
+    for intent in intents:
+        intent_path = f"{flow_path}/{intent}"
+        try:
+            w.files.create_directory(intent_path)
+            intent_paths[intent] = intent_path
+            print(f"  ✅ Created folder: {intent_path}")
+        except Exception as e:
+            print(f"  ⚠️  Folder may exist: {intent_path}")
+            intent_paths[intent] = intent_path
+
+    return intent_paths
 
 # COMMAND ----------
 
-# Display final status (only runs if notebook doesn't exit above)
-spark.sql(f"""
-    SELECT
-        attempt_id,
-        flow_id,
-        status,
-        progress_percentage,
-        iterations,
-        validation_percentage,
-        started_at,
-        completed_at,
-        CAST((unix_timestamp(completed_at) - unix_timestamp(started_at)) AS INT) as duration_seconds
-    FROM {delta_table}
-    WHERE attempt_id = '{attempt_id}'
-""").show(truncate=False)
+# MAGIC %md
+# MAGIC ## Conditional Logic: Generation vs Error Fixing
+
+# COMMAND ----------
+
+# Check if this is iteration 1 (generation) or iteration 2+ (error fixing)
+if iteration_num == 1:
+    print("\n🔧 MODE: GENERATION (Iteration 1)")
+    print("Task: Generate notebooks from NiFi XML")
+else:
+    print(f"\n🔧 MODE: ERROR FIXING (Iteration {iteration_num})")
+    print("Task: Analyze execution logs and fix errors")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 1: Parse NiFi XML or Read Logs
+
+# COMMAND ----------
+
+import xml.etree.ElementTree as ET
+import json
+
+# Determine starting iteration step number based on mode
+step_iteration_num = 1
+
+if iteration_num > 1:
+    # ITERATION 2+: Read and analyze logs
+    print(f"\n[Step 1/4] Reading execution logs from: {logs_path}")
+
+    try:
+        # Read log files from UC volume
+        log_files = []
+        try:
+            files = w.files.list_directory_contents(logs_path)
+            log_files = [f.path for f in files if f.path.endswith('.log')]
+        except Exception as e:
+            print(f"⚠️  Could not list log files: {e}")
+            # For dummy agent, simulate no logs found
+            log_files = []
+
+        if not log_files:
+            print("⚠️  No log files found. This is a test - simulating error analysis.")
+
+            # Dummy agent: Simulate that we found errors but can't fix them
+            # Real agent would use LLM to analyze logs and determine fixability
+
+            # For now, mark as NEEDS_HUMAN on iteration 2+
+            if iteration_num >= 2:
+                print("❌ Dummy agent cannot analyze logs. Real implementation would:")
+                print("   1. Read log files from UC volume")
+                print("   2. Parse error messages and stack traces")
+                print("   3. Use LLM to categorize error types")
+                print("   4. Determine if errors are fixable")
+                print("   5. Generate fixes or return NEEDS_HUMAN")
+
+                add_iteration(step_iteration_num, 'read_logs', 'COMPLETED', 'Read logs (dummy - no real analysis)')
+
+                # Exit with NEEDS_HUMAN
+                result = {
+                    "status": "NEEDS_HUMAN",
+                    "iteration_num": iteration_num,
+                    "reason": "dummy_agent_limitation",
+                    "error_details": "Dummy agent cannot analyze logs or fix errors. Real implementation needed.",
+                    "next_action": "HUMAN_REVIEW"
+                }
+
+                dbutils.notebook.exit(json.dumps(result))
+
+        # If we had logs, we'd analyze them here
+        print(f"✅ Found {len(log_files)} log files")
+        add_iteration(step_iteration_num, 'read_logs', 'COMPLETED', f'Read {len(log_files)} log files')
+
+    except Exception as e:
+        error_msg = f"Failed to read logs: {str(e)}"
+        print(f"❌ {error_msg}")
+        add_iteration(step_iteration_num, 'read_logs', 'FAILED', None, error_msg)
+        dbutils.notebook.exit(json.dumps({
+            "status": "NEEDS_HUMAN",
+            "iteration_num": iteration_num,
+            "reason": "log_read_failed",
+            "error_details": error_msg,
+            "next_action": "HUMAN_REVIEW"
+        }))
+
+else:
+    # ITERATION 1: Parse NiFi XML
+    print(f"\n[Step 1/4] Parsing NiFi XML: {nifi_xml_path}")
+
+    try:
+        # Download and parse XML file
+        xml_content = w.files.download(nifi_xml_path).contents.read().decode('utf-8')
+        root = ET.fromstring(xml_content)
+
+        # Extract processors
+        processors = []
+        for proc_elem in root.findall('.//processor'):
+            proc_id = proc_elem.find('id')
+            proc_name = proc_elem.find('name')
+            proc_type = proc_elem.find('class')
+
+            if proc_id is not None and proc_name is not None and proc_type is not None:
+                proc_info = {
+                    'id': proc_id.text,
+                    'name': proc_name.text,
+                    'type': proc_type.text,
+                    'intent': categorize_processor(proc_type.text)
+                }
+                processors.append(proc_info)
+
+        print(f"✅ Found {len(processors)} processors")
+
+        # Show breakdown by intent
+        intent_counts = {}
+        for proc in processors:
+            intent = proc['intent']
+            intent_counts[intent] = intent_counts.get(intent, 0) + 1
+
+        print(f"\nProcessor breakdown by intent:")
+        for intent, count in sorted(intent_counts.items()):
+            print(f"  - {intent}: {count} processors")
+
+        add_iteration(step_iteration_num, 'parse_xml', 'COMPLETED', f'Parsed {len(processors)} processors from XML')
+
+    except Exception as e:
+        error_msg = f"Failed to parse XML: {str(e)}"
+        print(f"❌ {error_msg}")
+        add_iteration(step_iteration_num, 'parse_xml', 'FAILED', None, error_msg)
+        dbutils.notebook.exit(json.dumps({
+            "status": "FAILED",
+            "iteration_num": iteration_num,
+            "error": error_msg
+        }))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 2: Create Intent-Based Folder Structure (Generation Only)
+
+# COMMAND ----------
+
+step_iteration_num = 2
+
+if iteration_num == 1:
+    # Only create folders during generation
+    print(f"\n[Step 2/4] Creating intent-based folder structure")
+
+    try:
+        # Get unique intents
+        intents = list(set([p['intent'] for p in processors]))
+        print(f"Creating folders for {len(intents)} intents: {intents}")
+
+        # Create folders
+        intent_paths = create_intent_folders(output_path, flow_name, intents)
+
+        add_iteration(step_iteration_num, 'create_folders', 'COMPLETED', f'Created {len(intents)} intent folders')
+
+    except Exception as e:
+        error_msg = f"Failed to create folders: {str(e)}"
+        print(f"❌ {error_msg}")
+        add_iteration(step_iteration_num, 'create_folders', 'FAILED', None, error_msg)
+        dbutils.notebook.exit(json.dumps({
+            "status": "FAILED",
+            "iteration_num": iteration_num,
+            "error": error_msg
+        }))
+else:
+    print(f"\n[Step 2/4] Skipping folder creation (error fixing mode)")
+    # In error fixing mode, folders already exist
+    # We would load the existing intent structure here
+    intents = ['ingestion', 'transformation', 'routing', 'output', 'other']  # Placeholder
+    intent_paths = {intent: f"{output_path}/{flow_name}/{intent}" for intent in intents}
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 3: Generate or Fix Notebooks
+
+# COMMAND ----------
+
+step_iteration_num = 3
+generated_notebooks = []
+
+if iteration_num == 1:
+    # GENERATION MODE
+    print(f"\n[Step 3/4] Generating test notebooks")
+
+    try:
+        for processor in processors:
+            intent = processor['intent']
+            proc_name = processor['name'].replace(' ', '_').replace('/', '_').replace('\\', '_')
+
+            # Generate notebook content
+            notebook_content = generate_test_notebook(
+                flow_name=flow_name,
+                processor_name=processor['name'],
+                processor_type=processor['type'],
+                intent=intent
+            )
+
+            # Save to intent folder
+            notebook_path = f"{intent_paths[intent]}/{proc_name}.py"
+            w.files.upload(notebook_path, notebook_content.encode('utf-8'), overwrite=True)
+            generated_notebooks.append(notebook_path)
+            print(f"  ✅ Generated: {notebook_path}")
+
+            # Record as patch
+            add_patch(iteration_num, notebook_path, f"Generated test notebook for {processor['name']} ({intent})")
+
+        print(f"\n✅ Generated {len(generated_notebooks)} notebooks")
+        add_iteration(step_iteration_num, 'generate_notebooks', 'COMPLETED', f'Generated {len(generated_notebooks)} test notebooks')
+
+    except Exception as e:
+        error_msg = f"Failed to generate notebooks: {str(e)}"
+        print(f"❌ {error_msg}")
+        add_iteration(step_iteration_num, 'generate_notebooks', 'FAILED', None, error_msg)
+        dbutils.notebook.exit(json.dumps({
+            "status": "FAILED",
+            "iteration_num": iteration_num,
+            "error": error_msg
+        }))
+
+else:
+    # ERROR FIXING MODE
+    print(f"\n[Step 3/4] Fixing notebooks based on error analysis")
+
+    # Dummy agent: We already determined in Step 1 that we can't fix errors
+    # Real agent would:
+    # 1. Analyze which notebooks failed
+    # 2. Use LLM to generate fixes
+    # 3. Update the notebooks
+    # 4. Record patches
+
+    print("⚠️  Dummy agent cannot fix notebooks. Exiting with NEEDS_HUMAN.")
+    add_iteration(step_iteration_num, 'fix_notebooks', 'COMPLETED', 'Dummy agent cannot fix - needs real implementation')
+
+    dbutils.notebook.exit(json.dumps({
+        "status": "NEEDS_HUMAN",
+        "iteration_num": iteration_num,
+        "reason": "dummy_agent_limitation",
+        "error_details": "Dummy agent cannot fix errors. Real LLM-based agent implementation needed.",
+        "next_action": "HUMAN_REVIEW"
+    }))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 4: Finalize and Return Structured Output
+
+# COMMAND ----------
+
+step_iteration_num = 4
+
+if iteration_num == 1:
+    # GENERATION MODE - Return success with notebooks to execute
+    print(f"\n[Step 4/4] Finalizing generation")
+
+    try:
+        add_iteration(step_iteration_num, 'finalize', 'COMPLETED', 'Notebook generation completed successfully')
+
+        print("=" * 60)
+        print("✅ GENERATION COMPLETE")
+        print("=" * 60)
+        print(f"Run ID: {run_id}")
+        print(f"Flow ID: {flow_id}")
+        print(f"Iteration: {iteration_num}")
+        print(f"Generated Notebooks: {len(generated_notebooks)}")
+        print(f"Output Location: {output_path}/{flow_name}")
+        print("=" * 60)
+        print("\n⚠️ NOTE: This was a TEST conversion using dummy agent")
+        print("Real conversions will generate functional PySpark code")
+        print("=" * 60)
+
+        # Return structured output for Flask orchestrator
+        result = {
+            "status": "SUCCESS",
+            "iteration_num": iteration_num,
+            "notebooks_generated": generated_notebooks,
+            "next_action": "EXECUTE_NOTEBOOKS"
+        }
+
+        dbutils.notebook.exit(json.dumps(result))
+
+    except Exception as e:
+        error_msg = f"Failed to finalize: {str(e)}"
+        print(f"❌ {error_msg}")
+        add_iteration(step_iteration_num, 'finalize', 'FAILED', None, error_msg)
+        dbutils.notebook.exit(json.dumps({
+            "status": "FAILED",
+            "iteration_num": iteration_num,
+            "error": error_msg
+        }))
+
+else:
+    # ERROR FIXING MODE - Already exited in Step 3 with NEEDS_HUMAN
+    # This code should not be reached for dummy agent
+    print(f"\n[Step 4/4] This should not be reached in error fixing mode")
+    dbutils.notebook.exit(json.dumps({
+        "status": "NEEDS_HUMAN",
+        "iteration_num": iteration_num,
+        "reason": "unexpected_code_path",
+        "next_action": "HUMAN_REVIEW"
+    }))
