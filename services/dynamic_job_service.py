@@ -17,7 +17,7 @@ import config as app_config
 class DynamicJobService:
     """Service for creating dynamic Databricks jobs for flow conversions."""
 
-    def __init__(self, agent_notebook_path: Optional[str] = None):
+    def __init__(self, agent_notebook_path: Optional[str] = None, cluster_id: Optional[str] = None):
         """
         Initialize dynamic job service.
 
@@ -25,12 +25,15 @@ class DynamicJobService:
             agent_notebook_path: Path to agent notebook in Workspace.
                                 Defaults to env var AGENT_NOTEBOOK_PATH or
                                 /Workspace/Shared/nifi_conversion_dummy_agent
+            cluster_id: Existing cluster ID to use for job execution.
+                       Defaults to EXISTING_CLUSTER_ID from config.
         """
         self.client = WorkspaceClient()
         self.agent_notebook_path = (
             agent_notebook_path
             or os.getenv("AGENT_NOTEBOOK_PATH", "/Workspace/Shared/nifi_conversion_dummy_agent")
         )
+        self.cluster_id = cluster_id or app_config.EXISTING_CLUSTER_ID
         self.logger = logging.getLogger(__name__)
 
     def _get_cluster_config(self, autotermination_minutes: int = 15) -> dict:
@@ -85,6 +88,7 @@ class DynamicJobService:
         # Prepare job configuration using SDK classes (working pattern)
         task = jobs.Task(
             task_key=f"convert_{flow_name}",
+            existing_cluster_id=self.cluster_id,
             notebook_task=jobs.NotebookTask(
                 notebook_path=self.agent_notebook_path,
                 source=jobs.Source.WORKSPACE,
@@ -98,23 +102,13 @@ class DynamicJobService:
                     "schema": schema
                 }
             ),
-            new_cluster=self._get_cluster_config(),
             timeout_seconds=app_config.AGENT_TIMEOUT_SECONDS,
             max_retries=0
         )
 
         job_config = {
             "name": job_name,
-            "tasks": [task],
-            "max_concurrent_runs": 1,
-            "timeout_seconds": app_config.AGENT_TIMEOUT_SECONDS,
-            "tags": {
-                "flow_name": flow_name,
-                "flow_id": flow_id or "unknown",
-                "run_id": run_id,
-                "purpose": "nifi_conversion",
-                "created_by": "nifi_accelerator_app"
-            }
+            "tasks": [task]
         }
 
         try:
@@ -310,6 +304,7 @@ class DynamicJobService:
 
             task = jobs.Task(
                 task_key=f"execute_{notebook_name}_{i}",
+                existing_cluster_id=self.cluster_id,
                 notebook_task=jobs.NotebookTask(
                     notebook_path=notebook_path,
                     source=jobs.Source.WORKSPACE,
@@ -317,7 +312,6 @@ class DynamicJobService:
                         "log_output_path": log_file_path
                     }
                 ),
-                new_cluster=self._get_cluster_config(),
                 timeout_seconds=app_config.EXECUTION_TIMEOUT_SECONDS,
                 max_retries=0
             )
@@ -325,16 +319,7 @@ class DynamicJobService:
 
         job_config = {
             "name": job_name,
-            "tasks": tasks,
-            "max_concurrent_runs": 1,
-            "timeout_seconds": app_config.EXECUTION_TIMEOUT_SECONDS,
-            "tags": {
-                "flow_name": flow_name,
-                "run_id": run_id,
-                "iteration_num": str(iteration_num),
-                "purpose": "notebook_execution",
-                "created_by": "nifi_accelerator_app"
-            }
+            "tasks": tasks
         }
 
         try:
@@ -407,29 +392,19 @@ class DynamicJobService:
         # Prepare job configuration using SDK classes (working pattern)
         task = jobs.Task(
             task_key=f"agent_iter{iteration_num}",
+            existing_cluster_id=self.cluster_id,
             notebook_task=jobs.NotebookTask(
                 notebook_path=self.agent_notebook_path,
                 source=jobs.Source.WORKSPACE,
                 base_parameters=base_parameters
             ),
-            new_cluster=self._get_cluster_config(),
             timeout_seconds=app_config.AGENT_TIMEOUT_SECONDS,
             max_retries=0
         )
 
         job_config = {
             "name": job_name,
-            "tasks": [task],
-            "max_concurrent_runs": 1,
-            "timeout_seconds": app_config.AGENT_TIMEOUT_SECONDS,
-            "tags": {
-                "flow_name": flow_name,
-                "flow_id": flow_id or "unknown",
-                "run_id": run_id,
-                "iteration_num": str(iteration_num),
-                "purpose": "agent_conversion",
-                "created_by": "nifi_accelerator_app"
-            }
+            "tasks": [task]
         }
 
         try:
