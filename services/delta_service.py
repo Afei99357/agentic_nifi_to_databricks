@@ -40,31 +40,32 @@ class DeltaService:
         logging.info(f"DeltaService configured: table={self.table_name}, warehouse={self.http_path}")
 
     def _get_connection(self):
-        """Get or create SQL connection using WorkspaceClient default auth (app managed identity)."""
+        """Get or create SQL connection using credentials_provider (required for Databricks Apps)."""
         import logging
         from databricks.sdk import WorkspaceClient
 
         if self._connection is None or not self._connection.open:
-            # WorkspaceClient uses default auth chain (app managed identity in Databricks Apps)
+            # Get credentials provider from WorkspaceClient (uses app managed identity)
             ws_client = WorkspaceClient()
 
-            # Get token from config.authenticate() - returns callable or string token
-            auth_token = ws_client.config.authenticate()
-            if callable(auth_token):
-                # If it's a callable (token provider), call it to get the token
-                token = auth_token()
-            elif hasattr(auth_token, 'token'):
-                # If it has a token() method, call it
-                token = auth_token.token()
-            else:
-                # Otherwise it's the token string itself
-                token = auth_token
+            # Use the SDK's credential provider directly - this is the pattern that works in Databricks Apps
+            # The credentials_provider parameter is required to avoid hanging (GitHub issue #651)
+            def credentials_provider():
+                """Credentials provider using WorkspaceClient's auth."""
+                # Get token from SDK's authenticate method
+                auth_result = ws_client.config.authenticate()
+                if callable(auth_result):
+                    return auth_result()
+                elif hasattr(auth_result, 'token'):
+                    return auth_result.token()
+                else:
+                    return auth_result
 
-            logging.info("Connecting to SQL Warehouse with authenticated token from WorkspaceClient")
+            logging.info("Connecting to SQL Warehouse with credentials_provider from WorkspaceClient")
             self._connection = sql.connect(
                 server_hostname=self.server_hostname,
                 http_path=self.http_path,
-                access_token=token,
+                credentials_provider=credentials_provider,  # Required for Databricks Apps
                 _socket_timeout=120,  # Increased for serverless
                 _tls_no_verify=False
             )
