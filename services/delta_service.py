@@ -32,9 +32,8 @@ class DeltaService:
         logging.info(f"DeltaService configured: table={self.table_name}, warehouse={warehouse_id}")
 
     def _get_connection(self):
-        """Get or create SQL connection using official Databricks Apps pattern."""
+        """Get or create SQL connection using exact Databricks Dash template pattern."""
         import logging
-        from databricks.sdk import WorkspaceClient
 
         if self._connection is None or not self._connection.open:
             # Strip https:// from host if present (sql.connect expects just hostname)
@@ -43,31 +42,11 @@ class DeltaService:
             logging.info(f"Connecting to SQL Warehouse: host={server_hostname}, warehouse={self.cfg.warehouse_id}")
 
             try:
-                # Get access token from WorkspaceClient
-                ws = WorkspaceClient()
-                # The auth header is in format "Bearer <token>"
-                auth_header = ws.config.authenticate()
-
-                # Extract token if it's a callable
-                if callable(auth_header):
-                    token_result = auth_header()
-                    # Token result might be a dict with 'Authorization' key
-                    if isinstance(token_result, dict) and 'Authorization' in token_result:
-                        access_token = token_result['Authorization'].replace('Bearer ', '')
-                    else:
-                        access_token = str(token_result).replace('Bearer ', '')
-                else:
-                    access_token = str(auth_header).replace('Bearer ', '')
-
-                logging.info(f"Got access token (length: {len(access_token)})")
-
-                # Use access_token instead of credentials_provider
+                # Exact pattern from official Dash template (line 21-25)
                 self._connection = sql.connect(
                     server_hostname=server_hostname,
                     http_path=f"/sql/1.0/warehouses/{self.cfg.warehouse_id}",
-                    access_token=access_token,
-                    _socket_timeout=120,
-                    _tls_no_verify=False
+                    credentials_provider=lambda: self.cfg.authenticate
                 )
                 logging.info("✓ SQL Warehouse connection established")
             except Exception as e:
