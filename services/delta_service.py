@@ -6,6 +6,7 @@ Uses Databricks SQL Connector for containerized app environments.
 import os
 from typing import List, Optional
 from databricks import sql
+from databricks.sdk.core import Config, oauth_service_principal
 from models.nifi_flow_record import NiFiFlowRecord
 
 
@@ -58,42 +59,44 @@ class DeltaService:
 
         logging.info(f"DeltaService configured: table={self.table_name}, warehouse={self.http_path}, auth={'OAuth' if self.use_oauth else 'PAT'}")
 
+    def _create_oauth_credentials_provider(self):
+        """Create OAuth credentials provider for SQL Connector (Databricks Apps compatible)."""
+        def credential_provider():
+            config = Config(
+                host=f"https://{self.server_hostname}",
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            return oauth_service_principal(config)
+
+        return credential_provider
+
     def _get_connection(self):
         """Get or create SQL connection with timeout settings."""
         import logging
         if self._connection is None or not self._connection.open:
             if self.use_oauth:
-                # For Databricks Apps: Get OAuth token from Databricks SDK
-                # The SQL Connector doesn't support M2M OAuth directly, so we get a token from the SDK
-                logging.info("Getting OAuth token from Databricks SDK for SQL connection")
-                from databricks.sdk import WorkspaceClient
-                w = WorkspaceClient()
-
-                # Get OAuth token from the SDK's credentials
-                token = w.config.authenticate()
-                if hasattr(token, 'token'):
-                    access_token = token.token()
-                else:
-                    access_token = token
-
-                logging.info("Using OAuth token for SQL Warehouse connection")
+                # Use credentials_provider parameter (official OAuth M2M pattern)
+                logging.info("Connecting to SQL Warehouse with OAuth M2M credentials_provider")
                 self._connection = sql.connect(
                     server_hostname=self.server_hostname,
                     http_path=self.http_path,
-                    access_token=access_token,
-                    _socket_timeout=60,  # 60 second timeout
+                    credentials_provider=self._create_oauth_credentials_provider(),
+                    _socket_timeout=120,  # Increased for serverless
                     _tls_no_verify=False
                 )
             else:
-                # Use PAT authentication (local development)
-                logging.info("Using PAT for SQL Warehouse connection")
+                # PAT authentication (local development)
+                logging.info("Connecting with PAT for SQL Warehouse")
                 self._connection = sql.connect(
                     server_hostname=self.server_hostname,
                     http_path=self.http_path,
                     access_token=self.access_token,
-                    _socket_timeout=60,  # 60 second timeout
+                    _socket_timeout=120,  # Increased for serverless
                     _tls_no_verify=False
                 )
+
+            logging.info("✓ SQL Warehouse connection established")
         return self._connection
 
     def _row_to_dict(self, row, description):
