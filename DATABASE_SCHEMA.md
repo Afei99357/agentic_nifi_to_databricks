@@ -43,8 +43,8 @@ erDiagram
     }
 
     migration_iterations {
-        string run_id PK_FK "→ migration_runs.run_id"
-        int iteration_num PK "Iteration number"
+        string run_id FK "Composite PK + FK to migration_runs"
+        int iteration_num "Composite PK"
         string step "parse_xml|generate_code|validate"
         string step_status "RUNNING|COMPLETED|FAILED"
         timestamp ts
@@ -53,27 +53,27 @@ erDiagram
     }
 
     migration_patches {
-        string run_id PK_FK "→ migration_runs.run_id"
-        int iteration_num PK "Iteration number"
-        string artifact_ref PK "File/artifact modified"
+        string run_id FK "Composite PK + FK to migration_runs"
+        int iteration_num "Composite PK"
+        string artifact_ref "Composite PK - File modified"
         string patch_summary "Human-readable description"
         string diff_ref "Path to diff file or Git commit"
         timestamp ts
     }
 
     migration_sast_results {
-        string run_id PK_FK "→ migration_runs.run_id"
-        int iteration_num PK "Iteration number"
-        string artifact_ref PK "Artifact scanned"
+        string run_id FK "Composite PK + FK to migration_runs"
+        int iteration_num "Composite PK"
+        string artifact_ref "Composite PK - Artifact scanned"
         string scan_status "PENDING|SCANNING|PASSED|BLOCKED"
         string findings_json "Full SAST report as JSON"
         timestamp ts
     }
 
     migration_exec_results {
-        string run_id PK_FK "→ migration_runs.run_id"
-        int iteration_num PK "Iteration number"
-        string job_type PK "flow_job|validation_job"
+        string run_id FK "Composite PK + FK to migration_runs"
+        int iteration_num "Composite PK"
+        string job_type "Composite PK - flow_job|validation_job"
         string status "SUCCESS|FAILED|TIMEOUT"
         int runtime_s "Execution time in seconds"
         string error "Error message if failed"
@@ -82,8 +82,8 @@ erDiagram
     }
 
     migration_human_requests {
-        string run_id PK_FK "→ migration_runs.run_id"
-        int iteration_num PK "Iteration number"
+        string run_id FK "Composite PK + FK to migration_runs"
+        int iteration_num "Composite PK"
         string reason "sast_blocked|validation_failed|manual_review"
         string status "PENDING|RESOLVED|IGNORED"
         string instructions "What human should do"
@@ -121,7 +121,8 @@ erDiagram
 **Purpose:** Step-by-step progress trail. Agent writes one row per step.
 
 **Key Fields:**
-- Composite PK: `(run_id, iteration_num)`
+- **Composite PK:** `(run_id, iteration_num)`
+- `run_id` (FK): Links to migration_runs
 - `step`: Type of work being done
 - `step_status`: Status of this specific step
 
@@ -133,7 +134,8 @@ erDiagram
 **Purpose:** Tracks what code was changed by agent. For review and audit.
 
 **Key Fields:**
-- Composite PK: `(run_id, iteration_num, artifact_ref)`
+- **Composite PK:** `(run_id, iteration_num, artifact_ref)`
+- `run_id` (FK): Links to migration_runs
 - `artifact_ref`: Which file/artifact was modified
 - `diff_ref`: Path to diff file or Git commit
 
@@ -145,7 +147,8 @@ erDiagram
 **Purpose:** Security scan results. If BLOCKED, stop and mark NEEDS_HUMAN.
 
 **Key Fields:**
-- Composite PK: `(run_id, iteration_num, artifact_ref)`
+- **Composite PK:** `(run_id, iteration_num, artifact_ref)`
+- `run_id` (FK): Links to migration_runs
 - `scan_status`: Gates execution (BLOCKED prevents deployment)
 - `findings_json`: Full security scan report
 
@@ -157,7 +160,9 @@ erDiagram
 **Purpose:** Results of running generated notebooks. Validation pass/fail.
 
 **Key Fields:**
-- Composite PK: `(run_id, iteration_num, job_type)`
+- **Composite PK:** `(run_id, iteration_num, job_type)`
+- `run_id` (FK): Links to migration_runs
+- `job_type`: Type of job executed
 - `status`: SUCCESS/FAILED/TIMEOUT
 - `logs_ref`: Path to execution logs in UC Volume
 
@@ -169,7 +174,8 @@ erDiagram
 **Purpose:** When agent cannot proceed, create request for human guidance.
 
 **Key Fields:**
-- Composite PK: `(run_id, iteration_num)`
+- **Composite PK:** `(run_id, iteration_num)`
+- `run_id` (FK): Links to migration_runs
 - `reason`: Why human help is needed
 - `status`: PENDING until human resolves
 
